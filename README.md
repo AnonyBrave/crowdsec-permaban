@@ -1,5 +1,8 @@
 # PermaBan (Node.js)
 
+Score-based CrowdSec Web UI watcher with score-gated permanent auto-bans, dynamic web dashboard, zero npm deps;
+Docker / TrueNAS Scale app.
+
 Watches your **CrowdSec Web UI** and permanently bans aggressive, recidivist attacker IPs from foreign countries —
 with a scored candidate list, one-click Ban/Unban for everything else, and a dynamic web UI fed by live cycles.
 
