@@ -1,8 +1,6 @@
 # Docker Compose stack — `docker compose up -d` on any host, or paste it into a compose UI (Dockge, Portainer).
 services:
   crowdsec-permaban:
-    # Private registry: the machine that pulls runs `docker login ghcr.io -u <login>` once (ghcr repos are private by
-    # default, and the image name must stay lowercase). Build it with `docker build -t <the same name> .`.
     image: ghcr.io/AnonyBrave/crowdsec-permaban:latest
     container_name: crowdsec-permaban
     restart: unless-stopped
