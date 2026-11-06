@@ -81,11 +81,13 @@ Five views fed by a Server-Sent-Events stream (`/events`), so charts, verdicts a
   tab never sits blank until someone clicks "Refresh now".
 - **Candidates** — IP, country, score, events, scenarios, bans, first/last seen, verdict with the rule's reason string
   (`recidivist (3 bans)`, `aggressive …`), tag (`will auto-ban` / `suggested` / `banned by app`) and **Ban now** button.
-  Every column header is clickable (numeric columns sort high-first on the first click, stable ties keep insertion order);
-  the filter box searches IP, country and reason, live.
+  Every column header is clickable (numeric columns sort high-first on the first click, text columns low-first, a second click
+  reverses, stable ties keep insertion order); **the filter box searches the whole row as it is displayed** — every column, in both
+  its stored and shown form: `3499` *and* `3,499`, `2026-11-05` *and* `05/11/2026, 10:00:00`, verdict words and the tag words. It is a
+  substring match over that row text, so typing `4` finds every row whose displayed text contains it (counts *and* date digits).
 - **Banned** — every active decision joined with the IP's stored profile (events, bans, score), best-known country,
   scenario, origin (`crowdsec` / `cscli` / …), created/expires, `by app` tag, one-click **Unban**. Same sortable headers
-  and filter box.
+  and filter box: ip, country, scenario, origin, events, bans, score, created, expires, the tag — all matchable.
 - **Per-IP viewer** — clicking any IP cell in Candidates or Banned opens a profile modal: score + events/scenarios/bans,
   ban state, and every stored event for that IP with its **full raw JSON** as received from the Web UI API.
 - **Export links** — one-click downloads of exactly what the grids show: `candidates.csv` / `banned.csv`,
@@ -169,12 +171,13 @@ core/source.js  →  core/store.js  →  core/scoring.js  →  core/rules.js  �
   hint in its own host (`chart unavailable: …` inside an `<svg>`, `failed to render — …` inside a `<div>`) and logs to the
   console while cards, the other charts and both grids keep rendering. Geometry comes from what the file imports plus the
   module's own `viewBox` — using a name it never imports throws `ReferenceError` mid-render and everything after the throw
-  silently stops (a blank dashboard). It exports `renderCycle` + `guard` for the offline render test; the page ignores them.
+  silently stops (a blank dashboard). It exports `renderCycle`, `guard`, `loadState`, `searchCandidate`, `searchBanned` for the offline
+  tests; the page ignores them.
 
 ## Tests
 
 ```powershell
-node --test tests/        # 69 offline tests — no real server, no network beyond localhost
+node --test tests/        # 73 offline tests — no real server, no network beyond localhost
 ```
 
 rules **11**, scoring **7** (candidate flags included), store **15** (read-only mode, scratch fallback, compaction,
@@ -209,6 +212,18 @@ the regression guard for "nothing shows anymore" — an unimported constant (`SP
 chart + scenarios + countries in one go. The third test runs the real `loadState()` with a **wiped** DOM against a live
 server: bars, cards, status `Connected` and scenario rows must appear from `/api/state` alone — no SSE frame, no "Refresh
 now" click — which is exactly the page-load bug it fixes.
+
+**grid** 4 — `public/app.js` under the same shim, this time with `<th data-key>` header cells (click handlers, `data-numeric`, the
+▲/▼ indicator) and both filter inputs, so real header clicks and typed text drive the page's own code. Every column of both grids is
+sorted on a first click in the right direction (numbers high-first, text low-first, empty values first ascending / last descending),
+the displayed cell order follows the sorted rows, a second click reverses it, ties keep the server's ranking, and only the active header
+carries an arrow. The filter box is typed per column: **ip, country, scenario, origin, events, bans, score, created, expires**, plus
+verdict/tag words — matching the stored value (`3499`, `2026-11-05`) *and* what the cell shows (`3,499`, `05/11/2026, 10:00:00`); a text
+nothing displays shows 0 rows, clearing it restores every row, and the active sort keeps ordering the narrowed grid. Column coverage is
+also proved column-by-column through `searchCandidate` / `searchBanned`: each sortable column gets a distinctive value (a date day,
+`9001` + `9,001`, a marker word) that must be findable — this is the regression guard for the filter box that searched only
+ip/country/scenario/origin and answered empty for events/bans/score/created/expires, and it pairs with **ui**'s static check that every
+`data-key` column is named in its grid's builder.
 
 ## Docker & TrueNAS Scale app
 

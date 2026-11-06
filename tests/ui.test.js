@@ -60,10 +60,15 @@ test('Ui_SortableColumnsAreFieldsTheServerSends', () => {
     ['ip', 'country', 'scenario', 'origin', 'events', 'bans', 'score', 'createdAt', 'expiresAt'],
     banKeys.slice(0, 9));
 
-  // The filter boxes name the keys they search — those must be real fields too.
+  // The filter boxes search one derived field per row (`_s`), the whole row as displayed — so every column above, numbers
+  // grouped and dates in en-GB form included, is matchable. `tests/grid.test.js` drives real typing; here we keep the static pair:
+  // the builder must mention every sortable column of its grid, or a renamed field silently stops being filterable.
   const filters = [...appjs.matchAll(/keys:\s*\[([^\]]+)\]/g)].map((m) => m[1].split(',').map((s) => s.trim().replace(/'/g, '')));
-  assert.deepEqual(filters[0], ['ip', 'country', 'reason']);
-  for (const k of filters.flat()) assert.ok(CANDIDATE_KEYS.includes(k) || BANNED_KEYS.includes(k), `filter key "${k}" is not a snapshot field`);
+  assert.deepEqual(filters, [['_s'], ['_s']]);
+
+  const builder = (name) => new RegExp(`function ${name}\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\}`).exec(appjs)[1];
+  for (const k of candKeys) assert.ok(new RegExp(`c\\.${k}\\b`).test(builder('searchCandidate')), `Candidates filter misses column "${k}"`);
+  for (const k of banKeys) assert.ok(new RegExp(`b\\.${k}\\b`).test(builder('searchBanned')), `Banned filter misses column "${k}"`);
 
   // Grid bodies and filter inputs referenced by the grid state exist in the page.
   const grids = [...appjs.matchAll(/(candidatesGrid|bannedGrid):\s*\{([\s\S]*?)\}/g)].map((m) => m[2]);

@@ -63,14 +63,17 @@ $('autoBanToggle').addEventListener('change', async () => {
 });
 
 // ── grids: one sort key + filter text each. Defaults match the server's own order.
+// `keys` is one field per row: `_s`, the searchable text built by searchRow() below — every column the grid shows,
+// exactly as the page renders it (grouped numbers and en-GB dates included), so typing what you can see matches.
 const grids = {
-  candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['ip', 'country', 'reason'] },
-  bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['ip', 'country', 'scenario', 'origin'] },
+  candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['_s'] },
+  bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['_s'] },
 };
 
+// Filter first (cheap), then sort the surviving rows — `sortRows` is stable, so ties keep the server's ranking.
 function renderGrid(name) {
   const g = grids[name];
-  const visible = filterRows(g.rows, g.text, g.keys);
+  const visible = sortRows(filterRows(g.rows, g.text, g.keys), g.key, g.dir);
   $(g.body).innerHTML = visible.map((x) => name === 'candidatesGrid' ? rowCandidate(x) : rowBanned(x)).join('');
   for (const th of document.querySelectorAll(`#${name} th[data-key]`))
     th.querySelector('.ind').textContent = th.dataset.key === g.key ? (g.dir < 0 ? ' ▼' : ' ▲') : '';
@@ -124,8 +127,8 @@ function renderCycle(c) {
   guard('topScenarios', () => renderBars($('topScenarios'), c.dashboard.topScenarios.map((s) => { const t = shortScenario(s.name); return [t.name, s.events, null, t.full]; })));
   guard('topCountries', () => renderBars($('topCountries'), c.dashboard.topCountries.map((s) => [s.name, s.events, s.bans])));
 
-  grids.candidatesGrid.rows = c.candidates;
-  grids.bannedGrid.rows = c.banned;
+  grids.candidatesGrid.rows = c.candidates.map((c) => ({ ...c, _s: searchCandidate(c) }));
+  grids.bannedGrid.rows = c.banned.map((b) => ({ ...b, _s: searchBanned(b) }));
   renderGrid('candidatesGrid');
   renderGrid('bannedGrid');
   $('bannedBanner').textContent = `${c.banned.length} active ban decision(s); ${new Set(c.banned.map((b) => b.ip)).size} unique IP(s).`;
@@ -164,6 +167,25 @@ function rowBanned(b) {
     <td>${fmtTs(b.createdAt)}</td><td>${fmtTs(b.expiresAt)}</td>
     <td>${b.autoBannedByApp ? '<span class="tag">by app</span>' : ''}</td>
     <td class="actions"><button class="mini" data-unban="${b.id}">Unban</button></td></tr>`;
+}
+
+// The filter box matches a row by the text the page actually shows for it: every column's raw value **and** its
+// displayed form (grouped numbers, en-GB dates), plus the verdict tag words. So `3499`, `3,499`, `2026-11-05` and
+// `05/11/2026, 10:00:00` all find their row — that is what made "filter by events/score/created/expires" answer empty.
+const rowWords = (parts) => parts.flat().map((v) => String(v ?? '')).join(' ');
+
+function searchCandidate(c) {
+  const tag = c.action === 'auto-ban' ? (c.autoBannedByApp ? 'banned by app' : 'will auto-ban')
+    : c.action === 'suggest' ? 'suggested' : '';
+  return rowWords([c.ip, c.country, [c.score, n0(c.score)], [c.eventCount, n0(c.eventCount)],
+    [c.scenarioCount, n0(c.scenarioCount)], [c.banCount, n0(c.banCount)],
+    [c.firstSeen, fmtTs(c.firstSeen)], [c.lastSeen, fmtTs(c.lastSeen)], c.reason, tag]);
+}
+
+function searchBanned(b) {
+  return rowWords([b.ip, b.country, b.scenario, b.origin, [b.events, n0(b.events)], [b.bans, n0(b.bans)],
+    [b.score, n0(b.score)], [b.createdAt, fmtTs(b.createdAt)], [b.expiresAt, fmtTs(b.expiresAt)],
+    b.autoBannedByApp ? 'by app' : '']);
 }
 
 function shortReason(r) { return r.length > 70 ? r.slice(0, 69) + '…' : r; }
@@ -333,8 +355,8 @@ const fmtTs = (iso) => !iso ? '' : new Date(iso).toLocaleString('en-GB', { hour1
 
 loadState();
 
-// Named exports for the offline UI test (`tests/render.test.js`): it executes this exact file under a minimal DOM shim in
-// Node, so the render path a browser runs is verified without a browser — charts, stripped scenario labels, guard hints.
-// `loadState` is exported too: a fresh page must paint from `/api/state` alone (no SSE frame, no "Refresh now" click).
+// Named exports for the offline UI tests (`tests/render.test.js`, `tests/grid.test.js`): they execute this exact file under a minimal DOM shim in
+// Node, so the render path a browser runs is verified without a browser — charts, stripped scenario labels, guard hints, and now grid sorting +
+// filter matching. `loadState` is exported too: a fresh page must paint from `/api/state` alone (no SSE frame, no "Refresh now" click).
 // The page itself loads app.js as an ES module and ignores these; zero dependencies stay.
-export { renderCycle, guard, loadState };
+export { renderCycle, guard, loadState, searchCandidate, searchBanned };
