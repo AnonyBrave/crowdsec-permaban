@@ -243,18 +243,20 @@ docker build -t ghcr.io/youruser/crowdsec-permaban:latest .   # node:20-alpine, 
 docker push ghcr.io/youruser/crowdsec-permaban:latest         # your registry (Docker Hub works too)
 ```
 
-The image bakes in the container defaults: unprivileged user `crowdsec-permaban` at fixed uid/gid **998**,
+The image bakes in the container defaults: unprivileged user `crowdsec-permaban` at fixed uid/gid **568** — the app-user
+id most container apps run as (`PUID`/`PGID` 568), so shared app folders usually already grant it write access.
 `PERMABAN_DATA_DIR=/data`, `PERMABAN_HOST=0.0.0.0`, port **8780**, and a healthcheck on `/healthz`. `compose.yaml` is the
 file to deploy — standard compose syntax: `docker compose up -d` on any host, or paste it into a compose UI (Dockge,
 Portainer).
 
-`/data` exists **inside the image** owned by uid/gid 998, so Docker copies that ownership into a fresh named volume:
+`/data` exists **inside the image** owned by uid/gid 568, so Docker copies that ownership into a fresh named volume:
 `crowdsec-permaban-data:/data` is writable from the first launch (`mode read-write`, no store warning) and needs no ACL
-work. A **bind-mounted folder** does not inherit it — `chown -R 998:998 <folder>` once. If you forget, the app still runs:
-the store opens the history read-only, the banner names the mode and `/healthz` stays green, nothing is recorded.
+work. A **bind-mounted folder** does not inherit it — `chown -R 568:568 <folder>` once, and if your app folder's ACL
+already grants 568 (the usual case for shared app folders), there is nothing to do at all. If you forget, the app still
+runs: the store opens the history read-only, the banner names the mode and `/healthz` stays green, nothing is recorded.
 
 Deploy: build + push from any machine with a Docker CLI, set `image:` in `compose.yaml`, pick the volume (named volume =
-nothing to do; bind mount = chown for 998 once), fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`, `PERMABAN_PASSWORD`
+nothing to do; bind mount = chown for 568 once), fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`, `PERMABAN_PASSWORD`
 (+ `PERMABAN_WEBHOOK_URL` for ntfy pushes) — as env they seed settings on the first run only, and a Save in Settings
 writes them encrypted into the volume (`credentials.enc` + `key.bin`). Keep values out of any compose file you share or
 commit (`.env` with `${VAR}` references). Open `http://<host>:8780`: one instance per port — a second bind on 8780 fails,

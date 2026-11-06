@@ -8,7 +8,9 @@ services:
       - "8780:8780"                    # one instance per port
     volumes:
       # The data folder: settings.json, credentials.enc + key.bin, events.ndjson, state.json.
-      # A named volume is writable from the first launch: `/data` exists in the image owned by uid/gid 998, and Docker
+      # The app runs as uid/gid 568 (`PUID`/`PGID`), so a bind-mounted folder needs `chown -R 568:568` on it once — skip
+      # it if the ACL already grants 568, as shared app folders usually do; an unwritable mount gives a read-only store
+      # with a banner naming the mode, not a crash loop.
       - /mnt/data/crowdsec-permaban:/data
     environment:
       PERMABAN_BASE_URL: "https://crowdsecwebui.example.com"    # your Web UI, nginx Basic-auth front end

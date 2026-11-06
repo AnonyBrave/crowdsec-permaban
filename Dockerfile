@@ -2,12 +2,13 @@
 # Zero npm dependencies, so there is no install step to slow the build down.
 FROM node:20-alpine
 
-# Unprivileged user with fixed uid/gid 998 — one numeric owner is easy to grant write access on any mounted folder.
-RUN addgroup -S -g 998 crowdsec-permaban && adduser -S -u 998 -G crowdsec-permaban crowdsec-permaban
+# Unprivileged user with fixed uid/gid 568 — the conventional app-user id (`PUID`/`PGID` 568) that most container apps
+# run as, so shared app folders usually already grant it write access; one numeric owner is easy to set on any mount.
+RUN addgroup -S -g 568 crowdsec-permaban && adduser -S -u 568 -G crowdsec-permaban crowdsec-permaban
 
-# /data exists in the image, owned by uid/gid 998: Docker copies that ownership into a fresh **named volume**, so
-# `docker run -v permaban-data:/data` is writable from the first launch. A bind-mounted folder still needs chown for
-# 998 once (see README); if it does not, the app opens read-only and serves with a banner, no crash loop.
+# /data exists in the image, owned by uid/gid 568: Docker copies that ownership into a fresh **named volume**, so
+# `docker run -v permaban-data:/data` is writable from the first launch. A bind-mounted folder usually needs chown for
+# 568 once (see README); if it does not, the app opens read-only and serves with a banner, no crash loop.
 RUN mkdir -p /data && chown crowdsec-permaban:crowdsec-permaban /data
 
 WORKDIR /app
