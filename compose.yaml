@@ -11,13 +11,8 @@ services:
     volumes:
       # The data folder: settings.json, credentials.enc + key.bin, events.ndjson, state.json.
       # A named volume is writable from the first launch: `/data` exists in the image owned by uid/gid 998, and Docker
-      # copies that owner into a fresh volume. A bind-mounted folder needs `chown -R 998:998` on it once; an unwritable
-      # mount gives a read-only store with a banner naming the mode, not a crash loop.
-      - crowdsec-permaban-data:/data
+      - /mnt/data/crowdsec-permaban:/data
     environment:
-      # Seeded on the first run only; once `settings.json` exists these are ignored, and a Save in Settings writes the
-      # credentials encrypted into the volume (`credentials.enc` + `key.bin`). Keep the two credential lines empty in any
-      # compose file you share — enter them in Settings. Values can also live in `.env` as `${VAR}` references.
       PERMABAN_BASE_URL: "https://crowdsecwebui.example.com"    # your Web UI, nginx Basic-auth front end
       PERMABAN_USERNAME: ""
       PERMABAN_PASSWORD: ""
