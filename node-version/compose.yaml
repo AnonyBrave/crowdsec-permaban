@@ -1,13 +1,13 @@
 # TrueNAS Scale — Custom App (Docker Compose YAML). Import as an app; the image is built by you and pushed to your registry.
 # Standard compose syntax, nothing TrueNAS-specific: it also runs with plain `docker compose up -d` on any host.
 services:
-  permanode:
+  crowdsec-permaban:
     # Replace `youruser` with your own registry account. Build + push, see README. Private options: mark the Docker Hub
     # repo Private (Apps → Configuration → Sign-in to a Docker registry gives TrueNAS the credential), use
-    # ghcr.io/youruser/permanode:latest (private by default, add https://ghcr.io/ as "Other Registry"), or build on the
-    # NAS and reference a local name like permanode:local.
-    image: registry.hub.docker.com/youruser/permanode:latest
-    container_name: permanode
+    # ghcr.io/youruser/crowdsec-permaban:latest (private by default, add https://ghcr.io/ as "Other Registry"), or build on the
+    # NAS and reference a local name like crowdsec-permaban:local.
+    image: registry.hub.docker.com/youruser/crowdsec-permaban:latest
+    container_name: crowdsec-permaban
     restart: unless-stopped
     ports:
       - "8780:8780"
@@ -15,7 +15,7 @@ services:
       # A dataset on your pool, mounted read-write. It is the data folder: settings.json, credentials.enc + key.bin,
       # events.ndjson, state.json. First launch creates them as uid 998; set the dataset ACL for 998 once:
       #   zfs set setuid=off ... / chown -R 998:998 (in a TrueNAS shell) — then restart the app.
-      - /mnt/tank/apps/permanode:/data
+      - /mnt/tank/apps/crowdsec-permaban:/data
     environment:
       # Seeded on the first run only, once settings.json exists these are ignored. Credentials keep seeding until
       # you Save in the UI, which writes them encrypted into the volume (username/password live in credentials.enc).

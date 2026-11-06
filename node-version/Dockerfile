@@ -3,7 +3,7 @@
 FROM node:20-alpine
 
 # Unprivileged user with fixed uid/gid 998 — TrueNAS ACLs on the dataset you mount are easier to set for a known id.
-RUN addgroup -S -g 998 permanode && adduser -S -u 998 -G permanode permanode
+RUN addgroup -S -g 998 crowdsec-permaban && adduser -S -u 998 -G crowdsec-permaban crowdsec-permaban
 
 WORKDIR /app
 COPY core/ core/
@@ -23,7 +23,7 @@ EXPOSE 8780
 HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:8780/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-USER permanode
+USER crowdsec-permaban
 
 # No volume mounted, or a read-only mount: the app opens the history read-only and keeps serving
 # (see core/store.js), so there is no crash loop on permission problems — the banner says what happened.

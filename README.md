@@ -212,11 +212,11 @@ now" click — which is exactly the page-load bug it fixes.
 
 ```powershell
 # Replace `youruser` with your own registry account everywhere it appears (README, compose.yaml, package.json scripts).
-docker build -t registry.hub.docker.com/youruser/permanode:latest .   # node:20-alpine, no npm install step
-docker push registry.hub.docker.com/youruser/permanode:latest         # your registry (Docker Hub works)
+docker build -t registry.hub.docker.com/youruser/crowdsec-permaban:latest .   # node:20-alpine, no npm install step
+docker push registry.hub.docker.com/youruser/crowdsec-permaban:latest         # your registry (Docker Hub works)
 ```
 
-The image bakes in the container defaults: unprivileged user `permanode` at fixed uid/gid **998**,
+The image bakes in the container defaults: unprivileged user `crowdsec-permaban` at fixed uid/gid **998**,
 `PERMABAN_DATA_DIR=/data`, `PERMABAN_HOST=0.0.0.0`, port **8780**, and a healthcheck on `/healthz`. `compose.yaml` is
 the file to import — standard compose syntax, nothing TrueNAS-specific (it runs with plain `docker compose up -d` too).
 
@@ -225,7 +225,7 @@ the file to import — standard compose syntax, nothing TrueNAS-specific (it run
 Three ways, in order of effort:
 
 1. **Docker Hub, repo set to Private** — same commands as above, nothing else changes: push, then on
-   `hub.docker.com` open the `permanode` repository → **Settings → Change Repository Visibility → Private**. The Personal
+   `hub.docker.com` open the `crowdsec-permaban` repository → **Settings → Change Repository Visibility → Private**. The Personal
    plan includes **1 private repository**; authenticated pulls are limited to 200 per 6 hours (plenty for one NAS pulling
    `latest` occasionally). In TrueNAS: **Apps → Configuration → Sign-in to a Docker registry → Add Registry**, URI
    **Docker Hub**, username + password (a Docker Hub *Access Token* from Account Settings → Security is safer than the
@@ -235,23 +235,23 @@ Three ways, in order of effort:
    `read:packages` + `write:packages`, then
    ```powershell
    docker login ghcr.io -u youruser                        # paste the PAT (username = your GitHub login)
-   docker build -t ghcr.io/youruser/permanode:latest .
-   docker push ghcr.io/youruser/permanode:latest
+   docker build -t ghcr.io/youruser/crowdsec-permaban:latest .
+   docker push ghcr.io/youruser/crowdsec-permaban:latest
    ```
-   Change `compose.yaml` to `image: ghcr.io/youruser/permanode:latest`, and in TrueNAS add a registry with URI
+   Change `compose.yaml` to `image: ghcr.io/youruser/crowdsec-permaban:latest`, and in TrueNAS add a registry with URI
    **Other Registry** = `https://ghcr.io/`, your GitHub username, and the PAT. No pull-rate limit like Docker Hub's.
 3. **No registry at all (fully local)** — build on the NAS over SSH (`docker` CLI is available when the Docker plugin /
-   Apps service runs): copy this folder to a dataset, `cd` into it and `docker build -t permanode:local .`, then
-   `image: permanode:local` in `compose.yaml`. Nothing leaves your network. On some TrueNAS versions a Custom App import
+   Apps service runs): copy this folder to a dataset, `cd` into it and `docker build -t crowdsec-permaban:local .`, then
+   `image: crowdsec-permaban:local` in `compose.yaml`. Nothing leaves your network. On some TrueNAS versions a Custom App import
    wants the image present in the local store first — if that happens, transfer from your machine with
-   `docker save -o permanode.tar registry.hub.docker.com/youruser/permanode:latest` (scp it over, then
-   `docker load -i permanode.tar`).
+   `docker save -o crowdsec-permaban.tar registry.hub.docker.com/youruser/crowdsec-permaban:latest` (scp it over, then
+   `docker load -i crowdsec-permaban.tar`).
 
 1. Build + push from any machine with a Docker CLI (not needed on the NAS itself), then create a dataset for the data
-   folder — e.g. `tank/apps/permanode`. Give uid 998 write access **once**: add the group to the dataset's ACL, or in a
-   TrueNAS shell `chown -R 998:998 /mnt/tank/apps/permanode`.
+   folder — e.g. `tank/apps/crowdsec-permaban`. Give uid 998 write access **once**: add the group to the dataset's ACL, or in a
+   TrueNAS shell `chown -R 998:998 /mnt/tank/apps/crowdsec-permaban`.
 2. Apps → **Custom App (Docker Compose YAML)** and paste `compose.yaml`; set the volume to your dataset
-   (`/mnt/tank/apps/permanode:/data`) and the published port, fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`,
+   (`/mnt/tank/apps/crowdsec-permaban:/data`) and the published port, fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`,
    `PERMABAN_PASSWORD` (+ `PERMABAN_WEBHOOK_URL` for ntfy pushes). Credentials entered as env are seeded on first run;
    a Save in Settings writes them encrypted into the volume (`credentials.enc` + `key.bin`).
 3. Open `http://<truenas>:8780`. One instance per port — a second app on 8780 fails to bind, by design.
@@ -282,7 +282,7 @@ Publishing hygiene:
   never in a committed `compose.yaml`.
 - Registry tokens are write-scoped and minimal: GitHub PAT with `read:packages` + `write:packages` for GHCR, a Docker
   Hub **Access Token** (Account Settings → Security) instead of the account password. Set the repository private if
-  you want it invisible (`ghcr.io/youruser/permanode` is private by default; on Docker Hub flip
+  you want it invisible (`ghcr.io/youruser/crowdsec-permaban` is private by default; on Docker Hub flip
   **Settings → Change Repository Visibility → Private**), and keep your Web UI hostname out of README, compose file
   and commit messages before publishing.
 - Env seeding is first-run only: empty/unset `PERMABAN_*` values leave the built-in defaults alone (`PERMABAN_POLL_SECONDS: ''`
