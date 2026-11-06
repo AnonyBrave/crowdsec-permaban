@@ -1,0 +1,37 @@
+# TrueNAS Scale — Custom App (Docker Compose YAML). Import as an app; the image is built by you and pushed to your registry.
+# Standard compose syntax, nothing TrueNAS-specific: it also runs with plain `docker compose up -d` on any host.
+services:
+  permanode:
+    # Replace `youruser` with your own registry account. Build + push, see README. Private options: mark the Docker Hub
+    # repo Private (Apps → Configuration → Sign-in to a Docker registry gives TrueNAS the credential), use
+    # ghcr.io/youruser/permanode:latest (private by default, add https://ghcr.io/ as "Other Registry"), or build on the
+    # NAS and reference a local name like permanode:local.
+    image: registry.hub.docker.com/youruser/permanode:latest
+    container_name: permanode
+    restart: unless-stopped
+    ports:
+      - "8780:8780"
+    volumes:
+      # A dataset on your pool, mounted read-write. It is the data folder: settings.json, credentials.enc + key.bin,
+      # events.ndjson, state.json. First launch creates them as uid 998; set the dataset ACL for 998 once:
+      #   zfs set setuid=off ... / chown -R 998:998 (in a TrueNAS shell) — then restart the app.
+      - /mnt/tank/apps/permanode:/data
+    environment:
+      # Seeded on the first run only, once settings.json exists these are ignored. Credentials keep seeding until
+      # you Save in the UI, which writes them encrypted into the volume (username/password live in credentials.enc).
+      # Put your own CrowdSec Web UI URL here (the nginx Basic-auth front end), and set the two credential lines to
+      # your Web UI account — or leave them empty and enter them once in Settings.
+      PERMABAN_BASE_URL: "https://crowdsecwebui.example.com"
+      PERMABAN_USERNAME: ""
+      PERMABAN_PASSWORD: ""
+      PERMABAN_WEBHOOK_URL: ""          # ntfy-style topic URL for auto-ban / candidate alerts; empty = activity log only
+      PERMABAN_POLL_SECONDS: "60"
+      PERMABAN_PORT: "8780"
+      PERMABAN_HOST: "0.0.0.0"
+    healthcheck:
+      # The same endpoint as the UI export links: process alive, store readable, last cycle's verdict.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8780/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3

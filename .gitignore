@@ -1,0 +1,23 @@
+# Runtime data — never commit: credentials, settings, event history (the app writes these to PERMABAN_DATA_DIR).
+settings.json
+credentials.enc
+key.bin
+events.ndjson
+state.json
+
+# Scratch store fallback (%TEMP%\PermaBanNode), image tarballs transferred to the NAS.
+/scratch/
+*.tar
+
+# Temp test output captured by hand (stack traces with local absolute paths).
+/node-version/rr*.txt
+
+# Node/build noise.
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Editor & OS files.
+.vscode/
+.DS_Store
+Thumbs.db

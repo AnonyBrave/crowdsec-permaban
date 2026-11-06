@@ -1,0 +1,6 @@
+# Keep LF endings in the repo and working tree (the app runs on Linux containers; avoid CRLF churn on Windows).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.tar binary
+*.bin binary

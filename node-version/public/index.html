@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PermaBan — web</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand"><span class="dot"></span><b>PermaBan</b> <span class="sub">web edition — Node.js</span></div>
+    <label class="switch" title="Master auto-ban switch: ON = foreign candidates are banned automatically, OFF = suggest-only. Applies instantly, no Save needed.">
+      <input type="checkbox" id="autoBanToggle" /> Auto-ban
+    </label>
+    <span id="status" class="status">starting…</span>
+    <button id="refreshBtn" title="Run a poll cycle now">Refresh now</button>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <nav id="sidebar">
+    <button data-view="dashboard" class="active">Dashboard</button>
+    <button data-view="candidates">Candidates</button>
+    <button data-view="banned">Banned</button>
+    <button data-view="activity">Activity log</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+
+  <main id="views">
+
+    <!-- ── Dashboard ─────────────────────────────────────────────── -->
+    <section id="view-dashboard" class="view active">
+      <div class="cards wide">
+        <div class="card"><h3>Events stored</h3><div class="big" id="statTotal">0</div>
+          <div class="hint muted"><a href="/export/events.ndjson" download>Download raw history (NDJSON, full JSON of every event)</a></div></div>
+        <div class="card"><h3>Candidates</h3><div class="big" id="statCandidates">0</div></div>
+        <div class="card"><h3>Active bans</h3><div class="big" id="statBanned">0</div></div>
+        <div class="card"><h3>Auto-bans issued this cycle</h3><div class="big" id="statIssued">0</div></div>
+      </div>
+
+      <div class="charts">
+        <div class="chart card">
+          <h3>Recidivism among banned IPs</h3>
+          <svg id="donut" viewBox="0 0 240 150" preserveAspectRatio="xMidYMid meet"></svg>
+          <div class="legend"><span id="donutLegend"></span></div>
+        </div>
+
+        <div class="chart card">
+          <h3>Events per day (last 14 days)</h3>
+          <svg id="sparkline" viewBox="0 0 560 92" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+
+        <div class="chart card">
+          <h3>Top scenarios (events)</h3><div id="topScenarios"></div>
+        </div>
+
+        <div class="chart card">
+          <h3>Top countries (events / banned IPs)</h3><div id="topCountries"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Candidates ────────────────────────────────────────────── -->
+    <section id="view-candidates" class="view">
+      <div class="toolbar">
+        <input id="filterCandidates" placeholder="Filter — IP, country, verdict…" />
+        <span class="spacer"></span>
+        <a href="/export/candidates.csv" download>Candidates CSV</a>
+        <a href="/export/candidates.json" download>Candidates JSON</a>
+      </div>
+      <table id="candidatesGrid" class="grid"><thead><tr>
+        <th data-key="ip">IP</th><th data-key="country">Country</th><th data-key="score" data-numeric>Score</th>
+        <th data-key="eventCount" data-numeric>Events</th><th data-key="scenarioCount" data-numeric>Scenarios</th>
+        <th data-key="banCount" data-numeric>Bans</th><th data-key="firstSeen">First seen</th><th data-key="lastSeen">Last seen</th>
+        <th data-key="reason">Verdict</th><th></th>
+      </tr></thead><tbody id="candidateRows"></tbody></table>
+    </section>
+
+    <!-- ── Banned ────────────────────────────────────────────────── -->
+    <section id="view-banned" class="view">
+      <div class="banner info banner-small" id="bannedBanner"></div>
+      <div class="toolbar">
+        <input id="filterBanned" placeholder="Filter — IP, country, scenario, origin…" />
+        <span class="spacer"></span>
+        <a href="/export/banned.csv" download>Banned CSV</a>
+        <a href="/export/banned.json" download>Banned JSON</a>
+      </div>
+      <table id="bannedGrid" class="grid"><thead><tr>
+        <th data-key="ip">IP</th><th data-key="country">Country</th><th data-key="scenario">Scenario</th>
+        <th data-key="origin">Origin</th><th data-key="events" data-numeric>Events</th><th data-key="bans" data-numeric>Bans</th>
+        <th data-key="score" data-numeric>Score</th><th data-key="createdAt">Created</th><th data-key="expiresAt">Expires</th>
+        <th data-key="autoBannedByApp">By app</th><th></th>
+      </tr></thead><tbody id="bannedRows"></tbody></table>
+    </section>
+
+    <!-- ── Activity log ──────────────────────────────────────────── -->
+    <section id="view-activity" class="view">
+      <div id="activityLog" class="log"></div>
+    </section>
+
+    <!-- ── Settings ──────────────────────────────────────────────── -->
+    <section id="view-settings" class="view">
+      <div class="cols">
+        <div class="col">
+          <div class="card">
+            <h3>Connection</h3>
+            <label>Web UI URL<input id="fBaseUrl" /></label>
+            <label>Username<input id="fUser" /></label>
+            <label>Password<input id="fPass" type="password" autocomplete="off" /></label>
+            <label>Poll interval (s)<input id="fPoll" type="number" min="5" /></label>
+            <button id="testBtn">Test connection</button>
+          </div>
+
+          <div class="card">
+            <h3>Auto-ban switches</h3>
+            <label class="switch"><input type="checkbox" id="fAutoBan" /> Master auto-ban (auto-ban ↔ suggest-only)</label>
+            <label class="switch" title="Off → the safe list is absolutely protected, the threshold below is ignored. On → a safe-country attacker reaching this score is banned permanently."><input type="checkbox" id="fGate" /> Safe-country score gate</label>
+            <div class="hint" id="gateSummary"></div>
+          </div>
+
+          <div class="card">
+            <h3>Score weights</h3>
+            <label>Event weight<input id="fEvW" type="number" step="0.1" /></label>
+            <label>Scenario weight<input id="fScW" type="number" step="0.1" /></label>
+            <label>Ban weight<input id="fBanW" type="number" step="0.1" /></label>
+            <div class="hint" id="formulaPreview"></div>
+            <div class="hint muted">Applied on Save settings. Global: they change every score, including the safe-country threshold comparison.</div>
+          </div>
+
+          <div class="card">
+            <h3>App behaviour</h3>
+            <label class="switch"><input type="checkbox" id="fNotify" /> Show notifications (activity log + webhook)</label>
+            <label title="ntfy-style POST on every auto-ban / candidate alert. Leave empty for activity-log-only notifications.">Notification webhook URL<input id="fWebhook" placeholder="https://ntfy.sh/my-topic" /></label>
+            <label title="text = plain body with a Title header (ntfy style); json = {title, message}">Webhook body format<select id="fNotifyFmt"><option value="text">text</option><option value="json">JSON</option></select></label>
+            <div class="hint muted">The web edition has no tray and no Run-key startup: start it with <code>node server.js</code> (a scheduled task works fine). In a container, set the webhook at first launch with <code>PERMABAN_WEBHOOK_URL</code>.</div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="card">
+            <h3>Safe list &amp; score gate</h3>
+            <label>Safe countries (ISO-2, comma-separated)<input id="fSafe" /></label>
+            <label title="Composite score at which a safe-country candidate is banned permanently anyway. Set something huge like 100000000 to keep the safe list absolutely protected."
+                   >Auto-ban safe countries at score ≥<input id="fScoreGate" type="number" min="0" /></label>
+          </div>
+
+          <div class="card">
+            <h3>Candidate rules</h3>
+            <label>Recidivist: bans ≥<input id="fRecT" type="number" min="1" /></label>
+            <label>Aggressive: events ≥<input id="fAgEvT" type="number" min="0" /></label>
+            <label>Aggressive: scenarios ≥<input id="fAgScT" type="number" min="0" /></label>
+          </div>
+
+          <div class="card">
+            <h3>Ban length &amp; history</h3>
+            <label title="Go ParseDuration format, no d/y. 876000h = 100 years ≈ permanent."
+                   >Permanent duration<input id="fDur" /></label>
+            <label>Reason prefix<input id="fPrefix" /></label>
+            <label>Ban scenario<input id="fScenario" /></label>
+            <label>Retention days<input id="fRet" type="number" min="1" /></label>
+          </div>
+
+          <div class="card">
+            <h3>Data folder</h3>
+            <div class="hint muted" id="dataDirLine"></div>
+            <div class="hint muted"><code>PERMABAN_DATA_DIR</code> overrides it (dev/test hook). A launch that cannot write the folder opens the history read-only — bans are issued, records stay frozen.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="savebar">
+        <button id="saveBtn" class="primary">Save settings</button>
+        <span id="settingsMsg" class="msg"></span>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ── per-IP profile: the full raw JSON stored for that IP ─────────── -->
+<div id="profileModal" class="modal hidden">
+  <div class="sheet card">
+    <h3>IP profile — <span id="profileTitle"></span><button id="closeProfile" class="mini closebtn">Close</button></h3>
+    <div class="hint" id="profileSummary"></div>
+    <pre id="profileRaw"></pre>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

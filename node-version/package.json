@@ -1,0 +1,15 @@
+{
+  "name": "permanode",
+  "version": "1.0.0",
+  "description": "Node.js port of PermaBan — CrowdSec Web UI watcher with score-gated auto-bans and a dynamic web UI (zero npm dependencies).",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/",
+    "build-image": "docker build -t registry.hub.docker.com/youruser/permanode:latest .",
+    "push-image": "docker push registry.hub.docker.com/youruser/permanode:latest",
+    "run-container": "docker compose up -d"
+  },
+  "engines": { "node": ">=18" }
+}
