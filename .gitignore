@@ -10,7 +10,7 @@ state.json
 *.tar
 
 # Temp test output captured by hand (stack traces with local absolute paths).
-/node-version/rr*.txt
+/rr*.txt
 
 # Node/build noise.
 node_modules/

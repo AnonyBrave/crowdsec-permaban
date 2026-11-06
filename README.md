@@ -14,8 +14,7 @@ install step.
 ## Run
 
 ```powershell
-cd node-version
-node server.js          # prints "PermaBanNode listening on http://127.0.0.1:8780"
+node server.js          # from the repository root; prints "PermaBanNode listening on http://127.0.0.1:8780"
 ```
 
 Open **http://127.0.0.1:8780**. A scheduled task is the right way to start it at logon — there is no tray icon in this edition.
@@ -260,14 +259,16 @@ Three ways, in order of effort:
 3. Open `http://<truenas>:8780`. One instance per port — a second app on 8780 fails to bind, by design.
 
 A read-only or unwritable mount does not crash-loop: the store opens the history read-only, the banner names the mode
-and `/healthz` stays green (see *Data & configuration*). `node-version/package.json` has the matching scripts
+and `/healthz` stays green (see *Data & configuration*). `package.json` at the repository root has the matching scripts
 (`build-image`, `push-image`, `run-container`).
 
 ## Publishing & running your own instance
 
-Layout: `node-version/` is the app (`server.js`, `core/`, `public/`, `tests/`, `Dockerfile`, `compose.yaml`);
-this README is at the repository root. Nothing personal ships in the code — no credentials, no real Web UI hostname,
-no webhook topic, no registry account:
+Layout: everything lives at the repository root — `server.js`, `core/`, `public/`, `tests/`, `Dockerfile`,
+`compose.yaml`, `package.json`, `.dockerignore`, plus this `README.md`, `LICENSE`, `.gitignore`, `.gitattributes`.
+The Docker build context is the root, and `.dockerignore` keeps `tests/`, markdown, `Dockerfile` and `compose.yaml`
+out of the image. Nothing personal ships in the code — no credentials, no real Web UI hostname, no webhook topic,
+no registry account:
 
 - `DEFAULT_SETTINGS.baseUrl` is the placeholder `https://crowdsecwebui.example.com`; set your own URL in Settings or
   seed it on the first run with `PERMABAN_BASE_URL`. Same for the compose file's env values.
