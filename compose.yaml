@@ -6,7 +6,7 @@ services:
     # repo Private (Apps → Configuration → Sign-in to a Docker registry gives TrueNAS the credential), use
     # ghcr.io/youruser/crowdsec-permaban:latest (private by default, add https://ghcr.io/ as "Other Registry"), or build on the
     # NAS and reference a local name like crowdsec-permaban:local.
-    image: registry.hub.docker.com/youruser/crowdsec-permaban:latest
+    image: ghcr.io/AnonyBrave/crowdsec-permaban:latest 
     container_name: crowdsec-permaban
     restart: unless-stopped
     ports:
