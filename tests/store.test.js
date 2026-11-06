@@ -262,3 +262,78 @@ test('AllEvents_SortsOldestFirstForTheRawHistoryExport', () => {
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('Normalize_SurvivesGarbageDatesFromTheWebUiApi', () => {
+  const dir = tempDir();
+  const s = EventStore.open(dir);
+
+  // The API sent a duration string where the expiry date belongs, and a created_at that is not a date at all. Before
+  // this guard both threw "Invalid time value" inside upsertEvents — the cycle died and every UI route answered 500.
+  s.upsertEvents([
+    { ...ban(201, '4.4.4.4', 'not-a-date', { country: 'NL' }), expiresAt: '876000h' },
+    alert(5, '4.4.4.4', 40, 'ssh-bf', '2026-11-05T09:00:00.000Z'),
+  ]);
+
+  const row = s.allEvents().find((e) => e.id === 201);
+  assert.ok(row, 'the row is stored, not dropped');
+  assert.equal(row.expiresAt, null, 'a non-ISO expiry becomes null (grid shows an empty cell), never a thrown Date');
+  assert.match(row.ts, /^\d{4}-\d{2}-\d\dT\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'unparseable created_at falls back to the ingest time');
+
+  // The row behaves like normal data everywhere: an active ban, a day on the charts, raw JSON for the per-IP viewer.
+  assert.deepEqual(s.activeDecisions().map((d) => d.id), [201], 'the ban is active despite the garbage expiry');
+  const day = row.ts.slice(0, 10);
+  assert.ok(s.dailyEventCounts(7, new Date().toISOString()).find((d) => d.date === day).events >= 1,
+    'the junk-dated event counts on the day it arrived, so the charts keep working');
+
+  const again = EventStore.open(dir);   // persisted: the reload sees null expiry too, no re-throw from disk
+  assert.equal(again.allEvents().find((e) => e.id === 201).expiresAt, null);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const SCORING = { recidivistBanThreshold: 3, aggressiveEventThreshold: 1000, aggressiveScenarioThreshold: 2,
+  eventWeight: 1, scenarioWeight: 100, banWeight: 500 };
+
+test('Events_TheSameIdForAnAlertAndADecisionDoNotCollide', () => {
+  const dir = tempDir();
+  const s = EventStore.open(dir);
+
+  // Real Web UI behaviour: alerts and decisions are separate tables, both numbering from 1, so alert 9 and decision 9
+  // arrive in the same fetch. Keying on source+id alone let the later write erase the other row — history export,
+  // per-IP counts/scores and the Banned view all lost data silently.
+  s.upsertEvents([alert(9, '203.0.113.15', 600, 'ssh-bf', '2026-11-04T10:00:00.000Z'),
+    ban(9, '198.51.100.4', '2026-11-05T08:00:00.000Z', { country: 'US' })]);
+
+  assert.equal(s.totalEvents(), 2, 'both rows survive the fetch');
+  assert.equal(s.profileFor('203.0.113.15', SCORING).eventCount, 600, 'the alert is still counted in its own IP profile');
+  assert.deepEqual(s.activeDecisions().map((d) => d.ip), ['198.51.100.4'], 'and the ban is listed as active');
+
+  const kinds = new Set(s.allEvents().filter((e) => e.id === 9).map((e) => e.kind));
+  assert.deepEqual([...kinds].sort(), ['alert', 'decision'], 'the raw history export carries both rows at id 9');
+
+  const again = EventStore.open(dir);   // reload from disk: the same ids key apart there too
+  assert.equal(again.totalEvents(), 2);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('MarkInvisibleDecisionsExpired_LeavesTheAlertSharingThatIdAlone', () => {
+  const dir = tempDir();
+  const s = EventStore.open(dir);
+  const recent = new Date().toISOString();   // inside the lookback window, so the liveness sync sees it
+
+  s.upsertEvents([alert(9, '203.0.113.15', 600, 'ssh-bf', recent), ban(9, '198.51.100.4', recent)]);
+
+  // Decision 9 is no longer listed by the Web UI (unbanned server-side) → marked expired locally, one row only.
+  assert.equal(s.markInvisibleDecisionsExpired([], new Date(Date.now() - 3600000)), 1);
+  assert.equal(s.activeDecisions().length, 0);
+
+  const alertRow = s.allEvents().find((e) => e.kind === 'alert' && e.id === 9);
+  assert.ok(alertRow && !alertRow.expired, 'the alert with that id is untouched by the decision-side liveness sync');
+  assert.equal(s.profileFor('203.0.113.15', SCORING).eventCount, 600, 'its events still count for the score');
+
+  const again = EventStore.open(dir);   // the persisted override applies to decisions only
+  assert.equal(again.allEvents().find((e) => e.kind === 'alert' && e.id === 9).expired, false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});

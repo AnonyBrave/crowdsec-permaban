@@ -126,6 +126,15 @@ Everything lives in `%LOCALAPPDATA%\PermaBanNode\`:
 | `credentials.enc` + `key.bin` | username/password sealed with AES-256-GCM under a per-user random key file — the portable stand-in for DPAPI, which Node cannot reach. A corrupt/foreign side file leaves credentials empty; nothing crashes. |
 | `events.ndjson` + `state.json` | append-only event log (full raw JSON per event) plus the compacted overlay: auto-bans, notified IPs, locally-expired decision ids, retention-deleted keys. Full rewrite when either grows past 20 000 lines. ISO-8601 UTC strings, so day buckets and "older than" are plain string ordering |
 
+Rows are keyed **source + kind + id**: the Web UI numbers its alert and decision tables independently (both start at 1), so
+alert 12 and decision 12 are two different rows arriving in one fetch — keying on `source:id` alone let a later write
+overwrite the other silently, and the history export, per-IP counts/scores and the Banned view all lost data. Dates are
+normalized at ingest: an unparseable `created_at` becomes the ingest time, a non-ISO `detail.expiration` (duration strings
+like `876000h` do appear in that field) becomes `null`. Nothing is dropped and no cycle dies on `Invalid time value`; the
+grid shows an empty expiry cell, and the original text stays in `rawJson` for the per-IP viewer. Rows stored by older
+builds load unchanged — their entries in `state.json`'s `deletedKeys` just stop matching, and retention re-purges anything
+that resurfaces on the next cycle, so there is no migration step.
+
 `scoring` holds `recidivistBanThreshold`, `aggressiveEventThreshold`, `aggressiveScenarioThreshold`,
 `eventWeight` / `scenarioWeight` / `banWeight` (global: changing them moves every score **and** who clears the gate),
 `safeCountryBanScore`, `safeCountryBanEnabled`. Weights are decimals ≥ 0, invariant `.` parsing — unparsable text keeps
@@ -177,11 +186,12 @@ core/source.js  →  core/store.js  →  core/scoring.js  →  core/rules.js  �
 ## Tests
 
 ```powershell
-node --test tests/        # 73 offline tests — no real server, no network beyond localhost
+node --test tests/        # 76 offline tests — no real server, no network beyond localhost
 ```
 
-rules **11**, scoring **7** (candidate flags included), store **15** (read-only mode, scratch fallback, compaction,
-per-IP profile with raw JSON), pipeline **7** (baseline, no double ban, external unban, safe-list gate, master switch,
+rules **11**, scoring **7** (candidate flags included), store **18** (read-only mode, scratch fallback, compaction,
+per-IP profile with raw JSON, garbage dates from the API normalized, alert and decision rows at the same id kept apart),
+pipeline **7** (baseline, no double ban, external unban, safe-list gate, master switch,
 read-only cycle), server **6** — the E2E spawns the real `server.js` on an ephemeral port (`PERMABAN_PORT=0`) with the poll
 loop parked (`PERMABAN_START_PAUSED=1`, production never sets it) against a mock nginx-Basic Web UI and asserts what a
 browser sees: static HTML/CSS/JS bytes, SSE frames in order, one-click Ban/Unban round-trip, `/healthz` + profile +
@@ -236,6 +246,11 @@ docker push registry.hub.docker.com/youruser/crowdsec-permaban:latest         # 
 The image bakes in the container defaults: unprivileged user `crowdsec-permaban` at fixed uid/gid **998**,
 `PERMABAN_DATA_DIR=/data`, `PERMABAN_HOST=0.0.0.0`, port **8780**, and a healthcheck on `/healthz`. `compose.yaml` is
 the file to import — standard compose syntax, nothing TrueNAS-specific (it runs with plain `docker compose up -d` too).
+
+`/data` exists **inside the image** owned by uid/gid 998, so Docker copies that ownership into a fresh named volume:
+`-v crowdsec-permaban-data:/data` is writable from the first launch (`mode read-write`, no store warning). A
+**bind-mounted dataset** does not inherit it — set the ACL for 998 once (step 1 below). If you forget, the app still runs:
+the store opens the history read-only, the banner names the mode and `/healthz` stays green, nothing is recorded.
 
 ### Keeping the image private
 

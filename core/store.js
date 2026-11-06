@@ -12,7 +12,19 @@ import path from 'node:path';
 import { scoreProfiles } from './scoring.js';
 
 const ISO = (d) => new Date(d).toISOString();
-const KEY = (e) => `${e.source}:${e.id}`;
+
+// API dates can carry junk where an ISO date belongs (`876000h` in `detail.expiration`, a malformed `created_at`).
+// The store's rule is the same as everywhere else here: never die on data. A garbage event time falls back to the
+// ingest time, a garbage expiry becomes null (the grid shows an empty cell, sorting treats it as empty), and `rawJson`
+// keeps the original text so the per-IP viewer still shows exactly what the Web UI sent.
+const isoDate = (value, fallback) => { const d = new Date(value); return Number.isFinite(d.getTime()) ? d.toISOString() : fallback; };
+
+// Rows are keyed source + **kind** + id. The Web UI's alert and decision tables are independent sequences that both
+// start at 1, so `crowdsec:12` is ambiguous: keying on the id alone lets a decision overwrite an alert with the same
+// number (the history export, per-IP counts/scores and the Banned view all silently lose rows). Rows stored by older
+// versions load unchanged; their legacy `deletedKeys` entries just do not match, and retention re-purges anything that
+// resurfaces on the next cycle — no migration step.
+const KEY = (e) => `${e.source}:${e.kind}:${e.id}`;
 
 /// Full rewrite threshold: append-only log + small overlay files, compacted when either grows large.
 const COMPACT_LINES = 20000;
@@ -51,7 +63,7 @@ export class EventStore {
     this.dir = dir;
     this.readOnly = readOnly;
     this.warning = null;
-    this.events = new Map();            // source:id -> event
+    this.events = new Map();            // source:kind:id -> event
     this.autoBans = new Map();          // ip -> {ip, decisionId, country, score, reason, bannedAt}
     this.notified = new Set();          // ips already notified (notification dedup)
     this.expiredOverrides = new Set();  // decision ids this app marked expired locally
@@ -89,7 +101,7 @@ export class EventStore {
 
   // ------------------------------------------------------------------ writes
 
-  /// Upsert events (deduped by source+id, fields refreshed). Returns the number of NEW rows.
+  /// Upsert events (deduped by source+kind+id, fields refreshed). Returns the number of NEW rows.
   upsertEvents(events) {
     if (this.readOnly) return 0;   // history frozen: reads keep working, nothing is half-written
     const now = ISO(Date.now());
@@ -329,7 +341,7 @@ function normalizeEvent(e, now) {
   return {
     source: e.source ?? 'crowdsec',
     id: Number(e.id),
-    ts: ISO(e.ts),
+    ts: isoDate(e.ts, now),            // unparseable `created_at` → ingest time keeps the timeline sane
     ip: (e.ip ?? '').trim(),
     kind: e.kind,
     country: e.country ?? '',
@@ -338,7 +350,7 @@ function normalizeEvent(e, now) {
     decisionType: e.decisionType ?? '',
     decisionAction: e.decisionAction ?? '',
     expired: !!e.expired,
-    expiresAt: e.expiresAt ? ISO(e.expiresAt) : null,
+    expiresAt: e.expiresAt ? isoDate(e.expiresAt, null) : null,   // non-ISO expiry → null, not a thrown Date
     origin: e.origin ?? '',
     rawJson: raw,
     ingestedAt: e.ingestedAt ?? now,

@@ -12,9 +12,12 @@ services:
     ports:
       - "8780:8780"
     volumes:
-      # A dataset on your pool, mounted read-write. It is the data folder: settings.json, credentials.enc + key.bin,
-      # events.ndjson, state.json. First launch creates them as uid 998; set the dataset ACL for 998 once:
-      #   zfs set setuid=off ... / chown -R 998:998 (in a TrueNAS shell) — then restart the app.
+      # The data folder: settings.json, credentials.enc + key.bin, events.ndjson, state.json. Two ways to mount it:
+      # 1) A named volume (`crowdsec-permaban-data:/data`) — writable from the first launch: `/data` exists in the image
+      #    owned by uid/gid 998, and Docker copies that ownership into a fresh volume. No ACL work needed.
+      # 2) A dataset on your pool (the line below): set its ACL for 998 once — add the group in the GUI, or in a TrueNAS
+      #    shell `chown -R 998:998 /mnt/tank/apps/crowdsec-permaban`, then restart the app. An unwritable mount is not a
+      #    crash loop: the store opens read-only with a banner naming the mode, and `/healthz` stays green.
       - /mnt/tank/apps/crowdsec-permaban:/data
     environment:
       # Seeded on the first run only, once settings.json exists these are ignored. Credentials keep seeding until

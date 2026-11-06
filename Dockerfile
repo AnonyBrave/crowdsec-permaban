@@ -5,6 +5,11 @@ FROM node:20-alpine
 # Unprivileged user with fixed uid/gid 998 — TrueNAS ACLs on the dataset you mount are easier to set for a known id.
 RUN addgroup -S -g 998 crowdsec-permaban && adduser -S -u 998 -G crowdsec-permaban crowdsec-permaban
 
+# /data exists in the image, owned by uid/gid 998: Docker copies that ownership into a fresh **named volume**, so
+# `docker run -v permaban-data:/data` is writable from the first launch. A bind-mounted dataset still needs an ACL
+# for 998 (TrueNAS section in README); if it does not, the app opens read-only and serves with a banner, no crash loop.
+RUN mkdir -p /data && chown crowdsec-permaban:crowdsec-permaban /data
+
 WORKDIR /app
 COPY core/ core/
 COPY public/ public/
