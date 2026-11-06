@@ -1,7 +1,7 @@
 # Docker Compose stack — `docker compose up -d` on any host, or paste it into a compose UI (Dockge, Portainer).
 services:
   crowdsec-permaban:
-    image: ghcr.io/AnonyBrave/crowdsec-permaban:latest
+    image: ghcr.io/anonybrave/crowdsec-permaban:latest
     container_name: crowdsec-permaban
     restart: unless-stopped
     ports:
