@@ -57,7 +57,7 @@ export function scratchDataDirectory(env = process.env) {
 }
 
 /// Container hook: environment variables seed settings on **first run** (no `settings.json` in the data folder
-/// yet), so a TrueNAS app can be configured entirely from its compose file. Once settings have been saved in
+/// yet), so a container app can be configured entirely from its compose file. Once settings have been saved in
 /// the UI, the file wins and PERMABAN_BASE_URL / PERMABAN_WEBHOOK_URL / PERMABAN_POLL_SECONDS are ignored.
 /// Credentials are the exception: they never sit in `settings.json`, so PERMABAN_USERNAME/PASSWORD keep seeding
 /// them while no encrypted side file exists (they land in credentials.enc on the first Save).

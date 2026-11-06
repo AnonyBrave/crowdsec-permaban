@@ -1,40 +1,37 @@
-# TrueNAS Scale — Custom App (Docker Compose YAML). Import as an app; the image is built by you and pushed to your registry.
-# Standard compose syntax, nothing TrueNAS-specific: it also runs with plain `docker compose up -d` on any host.
+# Docker Compose stack — `docker compose up -d` on any host, or paste it into a compose UI (Dockge, Portainer).
 services:
   crowdsec-permaban:
-    # Replace `youruser` with your own registry account. Build + push, see README. Private options: mark the Docker Hub
-    # repo Private (Apps → Configuration → Sign-in to a Docker registry gives TrueNAS the credential), use
-    # ghcr.io/youruser/crowdsec-permaban:latest (private by default, add https://ghcr.io/ as "Other Registry"), or build on the
-    # NAS and reference a local name like crowdsec-permaban:local.
-    image: ghcr.io/AnonyBrave/crowdsec-permaban:latest 
+    # Private registry: the machine that pulls runs `docker login ghcr.io -u <login>` once (ghcr repos are private by
+    # default, and the image name must stay lowercase). Build it with `docker build -t <the same name> .`.
+    image: ghcr.io/AnonyBrave/crowdsec-permaban:latest
     container_name: crowdsec-permaban
     restart: unless-stopped
     ports:
-      - "8780:8780"
+      - "8780:8780"                    # one instance per port
     volumes:
-      # The data folder: settings.json, credentials.enc + key.bin, events.ndjson, state.json. Two ways to mount it:
-      # 1) A named volume (`crowdsec-permaban-data:/data`) — writable from the first launch: `/data` exists in the image
-      #    owned by uid/gid 998, and Docker copies that ownership into a fresh volume. No ACL work needed.
-      # 2) A dataset on your pool (the line below): set its ACL for 998 once — add the group in the GUI, or in a TrueNAS
-      #    shell `chown -R 998:998 /mnt/tank/apps/crowdsec-permaban`, then restart the app. An unwritable mount is not a
-      #    crash loop: the store opens read-only with a banner naming the mode, and `/healthz` stays green.
-      - /mnt/tank/apps/crowdsec-permaban:/data
+      # The data folder: settings.json, credentials.enc + key.bin, events.ndjson, state.json.
+      # A named volume is writable from the first launch: `/data` exists in the image owned by uid/gid 998, and Docker
+      # copies that owner into a fresh volume. A bind-mounted folder needs `chown -R 998:998` on it once; an unwritable
+      # mount gives a read-only store with a banner naming the mode, not a crash loop.
+      - crowdsec-permaban-data:/data
     environment:
-      # Seeded on the first run only, once settings.json exists these are ignored. Credentials keep seeding until
-      # you Save in the UI, which writes them encrypted into the volume (username/password live in credentials.enc).
-      # Put your own CrowdSec Web UI URL here (the nginx Basic-auth front end), and set the two credential lines to
-      # your Web UI account — or leave them empty and enter them once in Settings.
-      PERMABAN_BASE_URL: "https://crowdsecwebui.example.com"
+      # Seeded on the first run only; once `settings.json` exists these are ignored, and a Save in Settings writes the
+      # credentials encrypted into the volume (`credentials.enc` + `key.bin`). Keep the two credential lines empty in any
+      # compose file you share — enter them in Settings. Values can also live in `.env` as `${VAR}` references.
+      PERMABAN_BASE_URL: "https://crowdsecwebui.example.com"    # your Web UI, nginx Basic-auth front end
       PERMABAN_USERNAME: ""
       PERMABAN_PASSWORD: ""
-      PERMABAN_WEBHOOK_URL: ""          # ntfy-style topic URL for auto-ban / candidate alerts; empty = activity log only
+      PERMABAN_WEBHOOK_URL: ""          # ntfy-style topic URL for auto-ban / candidate pushes; empty = activity log only
       PERMABAN_POLL_SECONDS: "60"
       PERMABAN_PORT: "8780"
       PERMABAN_HOST: "0.0.0.0"
     healthcheck:
-      # The same endpoint as the UI export links: process alive, store readable, last cycle's verdict.
+      # Same endpoint as the UI export links: process alive, store readable, last cycle's verdict.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8780/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 60s
       timeout: 10s
       start_period: 20s
       retries: 3
+
+volumes:
+  crowdsec-permaban-data:

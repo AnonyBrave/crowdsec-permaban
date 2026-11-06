@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/",
-    "build-image": "docker build -t registry.hub.docker.com/youruser/crowdsec-permaban:latest .",
-    "push-image": "docker push registry.hub.docker.com/youruser/crowdsec-permaban:latest",
+    "build-image": "docker build -t ghcr.io/youruser/crowdsec-permaban:latest .",
+    "push-image": "docker push ghcr.io/youruser/crowdsec-permaban:latest",
     "run-container": "docker compose up -d"
   },
   "engines": { "node": ">=18" }

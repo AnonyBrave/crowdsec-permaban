@@ -5,7 +5,7 @@ key.bin
 events.ndjson
 state.json
 
-# Scratch store fallback (%TEMP%\PermaBanNode), image tarballs transferred to the NAS.
+# Scratch store fallback (%TEMP%\PermaBanNode), image tarballs from `docker save`.
 /scratch/
 *.tar
 

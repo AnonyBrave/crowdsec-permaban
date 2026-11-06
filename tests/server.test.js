@@ -344,7 +344,7 @@ test('Server_SettingsRoundTrip', async () => {
   }
 });
 
-// Container first run: a compose file can configure the app entirely through env vars (the TrueNAS yaml in README).
+// Container first run: a compose file can configure the app entirely through env vars (the compose env in README).
 // With no settings.json at all, PERMABAN_* seeds everything; a cycle then talks to the mock with those credentials.
 test('Server_EnvSeedsTheFirstRunAndNothingElseAfterwards', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perma-envseed-'));

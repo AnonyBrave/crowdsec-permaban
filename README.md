@@ -1,7 +1,7 @@
 # PermaBan (Node.js)
 
 Score-based CrowdSec Web UI watcher with score-gated permanent auto-bans, dynamic web dashboard, zero npm deps;
-Docker / TrueNAS Scale app.
+Docker image + Compose deployment.
 
 Watches your **CrowdSec Web UI** and permanently bans aggressive, recidivist attacker IPs from foreign countries —
 with a scored candidate list, one-click Ban/Unban for everything else, and a dynamic web UI fed by live cycles.
@@ -235,58 +235,53 @@ also proved column-by-column through `searchCandidate` / `searchBanned`: each so
 ip/country/scenario/origin and answered empty for events/bans/score/created/expires, and it pairs with **ui**'s static check that every
 `data-key` column is named in its grid's builder.
 
-## Docker & TrueNAS Scale app
+## Docker app
 
 ```powershell
-# Replace `youruser` with your own registry account everywhere it appears (README, compose.yaml, package.json scripts).
-docker build -t registry.hub.docker.com/youruser/crowdsec-permaban:latest .   # node:20-alpine, no npm install step
-docker push registry.hub.docker.com/youruser/crowdsec-permaban:latest         # your registry (Docker Hub works)
+# Replace `youruser` with your own registry account (README, compose.yaml, package.json scripts).
+docker build -t ghcr.io/youruser/crowdsec-permaban:latest .   # node:20-alpine, no npm install step
+docker push ghcr.io/youruser/crowdsec-permaban:latest         # your registry (Docker Hub works too)
 ```
 
 The image bakes in the container defaults: unprivileged user `crowdsec-permaban` at fixed uid/gid **998**,
-`PERMABAN_DATA_DIR=/data`, `PERMABAN_HOST=0.0.0.0`, port **8780**, and a healthcheck on `/healthz`. `compose.yaml` is
-the file to import — standard compose syntax, nothing TrueNAS-specific (it runs with plain `docker compose up -d` too).
+`PERMABAN_DATA_DIR=/data`, `PERMABAN_HOST=0.0.0.0`, port **8780**, and a healthcheck on `/healthz`. `compose.yaml` is the
+file to deploy — standard compose syntax: `docker compose up -d` on any host, or paste it into a compose UI (Dockge,
+Portainer).
 
 `/data` exists **inside the image** owned by uid/gid 998, so Docker copies that ownership into a fresh named volume:
-`-v crowdsec-permaban-data:/data` is writable from the first launch (`mode read-write`, no store warning). A
-**bind-mounted dataset** does not inherit it — set the ACL for 998 once (step 1 below). If you forget, the app still runs:
+`crowdsec-permaban-data:/data` is writable from the first launch (`mode read-write`, no store warning) and needs no ACL
+work. A **bind-mounted folder** does not inherit it — `chown -R 998:998 <folder>` once. If you forget, the app still runs:
 the store opens the history read-only, the banner names the mode and `/healthz` stays green, nothing is recorded.
+
+Deploy: build + push from any machine with a Docker CLI, set `image:` in `compose.yaml`, pick the volume (named volume =
+nothing to do; bind mount = chown for 998 once), fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`, `PERMABAN_PASSWORD`
+(+ `PERMABAN_WEBHOOK_URL` for ntfy pushes) — as env they seed settings on the first run only, and a Save in Settings
+writes them encrypted into the volume (`credentials.enc` + `key.bin`). Keep values out of any compose file you share or
+commit (`.env` with `${VAR}` references). Open `http://<host>:8780`: one instance per port — a second bind on 8780 fails,
+by design.
 
 ### Keeping the image private
 
-Three ways, in order of effort:
-
-1. **Docker Hub, repo set to Private** — same commands as above, nothing else changes: push, then on
-   `hub.docker.com` open the `crowdsec-permaban` repository → **Settings → Change Repository Visibility → Private**. The Personal
-   plan includes **1 private repository**; authenticated pulls are limited to 200 per 6 hours (plenty for one NAS pulling
-   `latest` occasionally). In TrueNAS: **Apps → Configuration → Sign-in to a Docker registry → Add Registry**, URI
-   **Docker Hub**, username + password (a Docker Hub *Access Token* from Account Settings → Security is safer than the
-   account password), Save. The Custom App then pulls the private image with that credential, and "Check for docker image
-   updates" keeps working. `compose.yaml`'s image line stays as it is.
-2. **GitHub Container Registry** — images are **private by default**: create a Personal Access Token with
-   `read:packages` + `write:packages`, then
+1. **GitHub Container Registry** — images are **private by default**. Create a Personal Access Token with
+   `read:packages` + `write:packages`, log in and push:
    ```powershell
    docker login ghcr.io -u youruser                        # paste the PAT (username = your GitHub login)
    docker build -t ghcr.io/youruser/crowdsec-permaban:latest .
    docker push ghcr.io/youruser/crowdsec-permaban:latest
    ```
-   Change `compose.yaml` to `image: ghcr.io/youruser/crowdsec-permaban:latest`, and in TrueNAS add a registry with URI
-   **Other Registry** = `https://ghcr.io/`, your GitHub username, and the PAT. No pull-rate limit like Docker Hub's.
-3. **No registry at all (fully local)** — build on the NAS over SSH (`docker` CLI is available when the Docker plugin /
-   Apps service runs): copy this folder to a dataset, `cd` into it and `docker build -t crowdsec-permaban:local .`, then
-   `image: crowdsec-permaban:local` in `compose.yaml`. Nothing leaves your network. On some TrueNAS versions a Custom App import
-   wants the image present in the local store first — if that happens, transfer from your machine with
-   `docker save -o crowdsec-permaban.tar registry.hub.docker.com/youruser/crowdsec-permaban:latest` (scp it over, then
-   `docker load -i crowdsec-permaban.tar`).
-
-1. Build + push from any machine with a Docker CLI (not needed on the NAS itself), then create a dataset for the data
-   folder — e.g. `tank/apps/crowdsec-permaban`. Give uid 998 write access **once**: add the group to the dataset's ACL, or in a
-   TrueNAS shell `chown -R 998:998 /mnt/tank/apps/crowdsec-permaban`.
-2. Apps → **Custom App (Docker Compose YAML)** and paste `compose.yaml`; set the volume to your dataset
-   (`/mnt/tank/apps/crowdsec-permaban:/data`) and the published port, fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`,
-   `PERMABAN_PASSWORD` (+ `PERMABAN_WEBHOOK_URL` for ntfy pushes). Credentials entered as env are seeded on first run;
-   a Save in Settings writes them encrypted into the volume (`credentials.enc` + `key.bin`).
-3. Open `http://<truenas>:8780`. One instance per port — a second app on 8780 fails to bind, by design.
+   Set `compose.yaml` to that image name and **keep it lowercase** (ghcr lowercases the repo). Every machine that pulls
+   runs `docker login ghcr.io -u youruser` once — the token lives in the engine's own config (`/root/.docker/config.json`),
+   never in the compose file. No pull-rate limit like Docker Hub's, and a personal package is pulled only by tokens for
+   that account (an organization package can have collaborators).
+2. **Docker Hub, repo set to Private** — same commands as above, then flip
+   **Settings → Change Repository Visibility → Private** on the `crowdsec-permaban` repository. The Personal plan includes
+   **1 private repository**; authenticated pulls are limited to 200 per 6 hours (plenty for one host pulling `latest`
+   occasionally). Use a Docker Hub *Access Token* (Account Settings → Security) instead of the account password, and log in
+   on every machine that pulls.
+3. **No registry at all (fully local)** — build where you deploy: copy this folder, `cd` into it and
+   `docker build -t crowdsec-permaban:local .`, then use `image: crowdsec-permaban:local`. Nothing leaves your network. If
+   the target host cannot build, move the image with `docker save -o crowdsec-permaban.tar <your-image-name>` (copy it over,
+   then `docker load -i crowdsec-permaban.tar`).
 
 A read-only or unwritable mount does not crash-loop: the store opens the history read-only, the banner names the mode
 and `/healthz` stays green (see *Data & configuration*). `package.json` at the repository root has the matching scripts
@@ -297,12 +292,14 @@ and `/healthz` stays green (see *Data & configuration*). `package.json` at the r
 Layout: everything lives at the repository root — `server.js`, `core/`, `public/`, `tests/`, `Dockerfile`,
 `compose.yaml`, `package.json`, `.dockerignore`, plus this `README.md`, `LICENSE`, `.gitignore`, `.gitattributes`.
 The Docker build context is the root, and `.dockerignore` keeps `tests/`, markdown, `Dockerfile` and `compose.yaml`
-out of the image. Nothing personal ships in the code — no credentials, no real Web UI hostname, no webhook topic,
-no registry account:
+out of the image. Nothing personal ships in the code — no credentials, no real Web UI hostname, no webhook topic. The one
+exception is `compose.yaml`'s `image:` line, which points at your private ghcr package by design (replace it before
+publishing a fork):
 
 - `DEFAULT_SETTINGS.baseUrl` is the placeholder `https://crowdsecwebui.example.com`; set your own URL in Settings or
   seed it on the first run with `PERMABAN_BASE_URL`. Same for the compose file's env values.
-- `youruser` in `compose.yaml`, `package.json` scripts and the examples above is yours to replace.
+- `youruser` in `package.json` scripts and the examples above is yours to replace with your registry account; ghcr image
+  names must stay lowercase.
 - `.gitignore` keeps runtime data out of git: `settings.json`, `credentials.enc`, `key.bin`, `events.ndjson`,
   `state.json`, the scratch folder, transferred image tarballs and temp test output. The tests write their fixtures to
   OS temp dirs (`os.tmpdir()` + a `perma-…-` prefix), never inside the repo.
