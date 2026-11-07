@@ -6,6 +6,8 @@ Docker image + Compose deployment.
 Watches your **CrowdSec Web UI** and permanently bans aggressive, recidivist attacker IPs from foreign countries —
 with a scored candidate list, one-click Ban/Unban for everything else, and a dynamic web UI fed by live cycles.
 
+> **Warning — vibe-coded project.** This repository is AI-generated/assisted, experimental and continuously evolving. It has not received a formal code review, security audit, production QA cycle, or performance guarantee. Use it at your own risk on trusted networks only.
+
 Built for one self-hosted CrowdSec instance with nginx HTTP Basic auth in front of the Web UI (the Web UI's own auth
 disabled — that is the setup `https://crowdsecwebui.example.com` stands for below), and fully configurable to any Web
 UI. **Zero npm dependencies** — only `node:http` + the built-in `global fetch`, so it runs on any Node ≥ 18 with no
