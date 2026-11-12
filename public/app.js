@@ -64,7 +64,7 @@ $('autoBanToggle').addEventListener('change', async () => {
 
 // ── grids: one sort key + filter text each. Defaults match the server's own order.
 // `keys` is one field per row: `_s`, the searchable text built by searchRow() below — every column the grid shows,
-// exactly as the page renders it (grouped numbers and en-GB dates included), so typing what you can see matches.
+// exactly as the page renders it (grouped numbers and `dd/mm/yyyy, hh:mm:ss` dates included), so typing what you can see matches.
 const grids = {
   candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['_s'] },
   bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['_s'] },
@@ -170,8 +170,9 @@ function rowBanned(b) {
 }
 
 // The filter box matches a row by the text the page actually shows for it: every column's raw value **and** its
-// displayed form (grouped numbers, en-GB dates), plus the verdict tag words. So `3499`, `3,499`, `2026-11-05` and
-// `05/11/2026, 10:00:00` all find their row — that is what made "filter by events/score/created/expires" answer empty.
+// displayed form (grouped numbers, `dd/mm/yyyy, hh:mm:ss` dates), plus the verdict tag words. So `3499`, `3,499`,
+// `2026-11-05` and `05/11/2026, 10:00:00` all find their row — that is what made "filter by events/score/created/expires"
+// answer empty.
 const rowWords = (parts) => parts.flat().map((v) => String(v ?? '')).join(' ');
 
 function searchCandidate(c) {
@@ -351,7 +352,17 @@ $('testBtn').addEventListener('click', async () => {
 });
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const fmtTs = (iso) => !iso ? '' : new Date(iso).toLocaleString('en-GB', { hour12: false });
+// Timestamps render in one fixed form: `dd/mm/yyyy, hh:mm:ss` built by hand from the Date's local fields. A locale call
+// (`toLocaleString('en-GB', …)`) varies its separator and digits between ICU versions (a Node 20 runner prints U+202F where a
+// browser prints a space), so what the page shows — and therefore what the filter box can match — would not be stable.
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtTs = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}, ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+};
 
 loadState();
 

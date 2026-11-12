@@ -1,7 +1,7 @@
 // The grid's sorting + filter box, executed as the page runs it: `public/app.js` under a DOM shim that models `<th data-key>`
 // headers (click handlers, `data-numeric`, the ▲/▼ indicator) and the two filter inputs. Header clicks and typed text drive the real
 // code once — app.js wires its listeners at module load, so one shared boot serves every test here. Expectations come from the raw
-// snapshot fields plus what the page displays (en-US grouped numbers, en-GB dates), following the documented sort rules; a column that
+// snapshot fields plus what the page displays (en-US grouped numbers, `dd/mm/yyyy, hh:mm:ss` dates), following the documented sort rules; a column that
 // sorts as text, or a filter box that reads only ip/country/scenario/origin, fails here instead of in someone's browser. Zero network:
 // snapshots go straight into `renderCycle`, and `/api/state` is stubbed so module init resolves.
 import test from 'node:test';
@@ -89,7 +89,17 @@ const snapshot = () => ({ at: '2026-11-06T15:00:00.000Z', totalEvents: 3800, aut
 
 const nf = new Intl.NumberFormat('en-US');
 const n0 = (x) => nf.format(Math.round(x));
-const fmtTs = (iso) => !iso ? '' : new Date(iso).toLocaleString('en-GB', { hour12: false });
+// Mirror of app.js's fixed display form: `dd/mm/yyyy, hh:mm:ss` built from local Date fields. Built by hand, not
+// `toLocaleString('en-GB', …)`, because locale output varies with ICU version and time zone — a needle typed here must be
+// the exact text the page prints on any runner.
+const pad2 = (n) => String(n).padStart(2, '0');
+const fmtTs = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}, ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+};
 
 // The page's `<td>` for one column, rebuilt here from the raw fields: rows ordered correctly in a cell that renders them in a
 // different format is caught too. Verdict cell = shortReason + action tag; Banned's last column is the by-app tag.
@@ -213,7 +223,7 @@ test('Grid_FilterBoxCoversEveryColumnOfBothGrids', () => {
                                                                   // per-column coverage for these small counts is proved column-by-column below
       ['ban count, substring rule', 'ban: 4', null],     // the documented whole-row substring match (see README)
       ['first seen ISO day', '2026-10-30', ['10.0.0.9']],
-      ['last seen as displayed en-GB', '06/11/2026, 12:00:00', ['203.0.113.5']],
+      ['last seen as displayed', fmtTs(CAND.find((r) => r.ip === '203.0.113.5').lastSeen), ['203.0.113.5']],
       ['verdict words', 'recidivist', ['10.0.0.9']],
       ['verdict tag words', 'will auto-ban', ['10.0.0.9']],
     ],
@@ -228,9 +238,9 @@ test('Grid_FilterBoxCoversEveryColumnOfBothGrids', () => {
       ['score as displayed', '5,599', ['10.0.0.9']],
       ['score stored', '1240', ['198.51.100.7']],
       ['created ISO day', '2026-11-05', ['10.0.0.9']],
-      ['created as displayed en-GB', '06/11/2026, 10:00:00', ['8.8.8.8']],
+      ['created as displayed', fmtTs(BANNED.find((r) => r.ip === '8.8.8.8').createdAt), ['8.8.8.8']],
       ['expires ISO day', '2126-11-03', ['198.51.100.7']],
-      ['expires as displayed en-GB', '04/11/2126, 11:00:00', ['10.0.0.9']],
+      ['expires as displayed', fmtTs(BANNED.find((r) => r.ip === '10.0.0.9').expiresAt), ['10.0.0.9']],
       ['by-app tag words', 'by app', ['10.0.0.9']],
     ],
   };
@@ -265,7 +275,7 @@ test('Grid_EverySortableColumnIsSearchableInThePageBuilders', () => {
       if (h.key === 'autoBannedByApp') { probe.autoBannedByApp = true; needles = ['by app']; }
       else if (DATE_KEYS.includes(h.key)) {
         probe[h.key] = '2031-12-21T23:59:00.000Z';
-        needles = ['2031-12-21', fmtTs(probe[h.key])];          // the ISO day and the en-GB text in the cell
+        needles = ['2031-12-21', fmtTs(probe[h.key])];          // the ISO day and the date text in the cell
       }
       else if (h.numeric) { probe[h.key] = 9001; needles = ['9001', n0(9001)]; }   // stored number + displayed form
       else { probe[h.key] = 'zzmarker77'; needles = ['zzmarker77']; }
@@ -275,9 +285,9 @@ test('Grid_EverySortableColumnIsSearchableInThePageBuilders', () => {
     }
   }
 
-  // The two grids' real rows carry the forms users type: grouped numbers, ISO day, en-GB date.
+  // The two grids' real rows carry the forms users type: grouped numbers, ISO day, `dd/mm/yyyy, hh:mm:ss` date.
   assert.ok(app.searchBanned(BANNED[0]).includes('3499') && app.searchBanned(BANNED[0]).includes(n0(3499)), 'events searchable stored and displayed');
-  assert.ok(app.searchBanned(BANNED[0]).includes('2026-11-05') && app.searchBanned(BANNED[0]).includes(fmtTs(BANNED[0].createdAt)), 'created searchable as ISO day and en-GB date');
+  assert.ok(app.searchBanned(BANNED[0]).includes('2026-11-05') && app.searchBanned(BANNED[0]).includes(fmtTs(BANNED[0].createdAt)), 'created searchable as ISO day and displayed date');
   assert.ok(app.searchCandidate(CAND[0]).includes('2026-10-30') && app.searchCandidate(CAND[0]).includes(n0(3500)), 'first seen + score searchable for a candidate row');
 });
 

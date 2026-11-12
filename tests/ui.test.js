@@ -61,7 +61,7 @@ test('Ui_SortableColumnsAreFieldsTheServerSends', () => {
     banKeys.slice(0, 9));
 
   // The filter boxes search one derived field per row (`_s`), the whole row as displayed — so every column above, numbers
-  // grouped and dates in en-GB form included, is matchable. `tests/grid.test.js` drives real typing; here we keep the static pair:
+  // grouped and dates in the page's `dd/mm/yyyy, hh:mm:ss` form included, is matchable. `tests/grid.test.js` drives real typing; here we keep the static pair:
   // the builder must mention every sortable column of its grid, or a renamed field silently stops being filterable.
   const filters = [...appjs.matchAll(/keys:\s*\[([^\]]+)\]/g)].map((m) => m[1].split(',').map((s) => s.trim().replace(/'/g, '')));
   assert.deepEqual(filters, [['_s'], ['_s']]);
