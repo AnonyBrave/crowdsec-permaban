@@ -230,8 +230,10 @@ now" click — which is exactly the page-load bug it fixes.
 sorted on a first click in the right direction (numbers high-first, text low-first, empty values first ascending / last descending),
 the displayed cell order follows the sorted rows, a second click reverses it, ties keep the server's ranking, and only the active header
 carries an arrow. The filter box is typed per column: **ip, country, scenario, origin, events, bans, score, created, expires**, plus
-verdict/tag words — matching the stored value (`3499`, `2026-11-05`) *and* what the cell shows (`3,499`, `05/11/2026, 10:00:00`); a text
-nothing displays shows 0 rows, clearing it restores every row, and the active sort keeps ordering the narrowed grid. Column coverage is
+verdict/tag words — matching the stored value (`3499`, `2026-11-05`) *and* what the cell shows (`3,499`, `05/11/2026, 10:00:00`);
+that displayed form is built by hand in the page's local time zone as fixed `dd/mm/yyyy, hh:mm:ss` (`fmtTs`), not via
+`toLocaleString('en-GB', …)`, whose separator varies between ICU versions (U+202F on a Node 20 CI runner vs an ASCII space in
+the browser), so the text stays byte-stable and typed needles match exactly; a text nothing displays shows 0 rows, clearing it restores every row, and the active sort keeps ordering the narrowed grid. Column coverage is
 also proved column-by-column through `searchCandidate` / `searchBanned`: each sortable column gets a distinctive value (a date day,
 `9001` + `9,001`, a marker word) that must be findable — this is the regression guard for the filter box that searched only
 ip/country/scenario/origin and answered empty for events/bans/score/created/expires, and it pairs with **ui**'s static check that every
