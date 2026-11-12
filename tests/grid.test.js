@@ -29,8 +29,9 @@ const STATE = { settings: { baseUrl: 'https://crowdsecwebui.example.com', userna
   autoBanEnabled: true, notificationsEnabled: true, notifyWebhookUrl: '', notifyFormat: 'text', safeCountries: ['FR'],
   scoring: { recidivistBanThreshold: 3, aggressiveEventThreshold: 1000, aggressiveScenarioThreshold: 2, eventWeight: 1,
     scenarioWeight: 100, banWeight: 500, safeCountryBanEnabled: true, safeCountryBanScore: 2500 },
-  blocklistEnabled: false, blocklistUrl: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4',
-  blocklistRefreshMinutes: 60, blocklistUnbanMinutes: 1440, blocklistCapPerCycle: 200 },
+  // Canonical first-run row for the dedicated tab; module init paints the working `uiLists` from exactly this settings shape.
+  blocklists: [{ url: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4', enabled: false, banScenario: 'blocklist/permaban', refreshMinutes: 60, unbanMinutes: 1440, capPerCycle: 200 }],
+},
   dataDir: 'X', mode: 'read-write', activity: [], storeWarning: null, cycle: null };
 
 function makeShim() {
@@ -86,9 +87,9 @@ const BANNED = [
 ];
 
 const snapshot = () => ({ at: '2026-11-06T15:00:00.000Z', totalEvents: 3800, autoBansIssued: 1, autoBansTotal: 4, connected: true,
-  // A cycle where the imported list added two bans and unbanned one: the page's card fields come from these numbers.
-  blocklistEnabled: true, blocklistUrl: 'https://example.test/abuseipdb-s100-30d.ipv4', blocklistAdded: 2, blocklistUnbanned: 1,
-  blocklistTracked: 7, blocklistSkip: null,
+  // A cycle where the refreshing lists added two bans and unbanned one: dashboard cards come from aggregate numbers, `blocklists` carries per-URL detail.
+  blocklistAdded: 2, blocklistUnbanned: 1, blocklistTracked: 7, blocklistSkip: null,
+  blocklists: [{ url: 'https://example.test/abuseipdb-s100-30d.ipv4', enabled: true, syncAt: null, added: 2, unbanned: 1, skip: null }],
   candidates: CAND.slice(), banned: BANNED.slice(),
   dashboard: { bannedIps: 3, recidivistBannedIps: 2, dailyEvents: [], topScenarios: [], topCountries: [] } });
 
@@ -323,8 +324,8 @@ test('Grid_FilterAndSortCombine', () => {
 });
 
 // The dashboard cards and the Settings form fill from what the server sends — not from this cycle's activity counters.
-// A page opened between two polls sees the persisted lifetime count, the tracked list number, and the saved blocklist
-// settings; reloads never blank them out.
+// A page opened between two polls sees the persisted lifetime count, aggregate tracked/added/unbanned cards, and the saved dedicated-tab
+// rows; reloads never blank them out. `addBlockList()` is exercised through its export — no browser, no createElement in this shim.
 test('Grid_CardsAndSettingsFormFollowTheStateSnapshot', () => {
   app.renderCycle(snapshot());
 
@@ -332,16 +333,21 @@ test('Grid_CardsAndSettingsFormFollowTheStateSnapshot', () => {
   assert.equal(String(els.statTotal.textContent), n0(3800));    // grouped as the page displays every event count
   assert.equal(String(els.statIssuedTotal.textContent), '4');   // lifetime counter, not this cycle's number
   assert.equal(String(els.statIssued.textContent), '1');
-  assert.equal(String(els.statBlockTotal.textContent), '7');    // what the imported list owns right now
+  assert.equal(String(els.statBlockTotal.textContent), '7');    // total tracked by every imported list right now
   assert.equal(String(els.statBlockAdded.textContent), '2');
   assert.equal(String(els.statBlockUnbanned.textContent), '1');
 
-  // Module init ran loadState() against the stubbed /api/state: every blocklist field lands in its input.
-  assert.equal(els.fBlockEnabled.checked, false);
-  assert.equal(els.fBlockUrl.value, 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4');
-  assert.equal(els.fBlockRefreshMin.value, 60);           // one field in minutes: 60 = hourly
-  assert.equal(els.fBlockUnbanMin.value, 1440);
-  assert.equal(els.fBlockCap.value, 200);
+  // Module init ran loadState() against the stubbed /api/state: `fillSettingsForm` painted the working row(s) from settings.blocklists.
+  const rows = app.collectBlocklists();
+  assert.deepEqual(rows, [{ url: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4', enabled: false, banScenario: 'blocklist/permaban', refreshMinutes: 60, unbanMinutes: 1440, capPerCycle: 200 }]);
+  assert.ok(els.blockRows.innerHTML.includes('https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4'));
+  assert.ok(els.blockRows.innerHTML.includes('blocklist/permaban'));   // the saved row's own scenario lands in its cell
+  assert.equal((els.blockRows.innerHTML.match(/<td class="bl-enabled">/g) ?? []).length, 1);
+
+  // The "+" button adds one row to the working table; URL-empty rows stay editable (collect/save keeps only URLs).
+  app.addBlockList();
+  assert.equal((els.blockRows.innerHTML.match(/<td class="bl-enabled">/g) ?? []).length, 2);
+  assert.deepEqual(app.collectBlocklists(), rows);
 
   app.renderCycle({ ...snapshot(), autoBansTotal: undefined });   // an older snapshot with no total falls back to this cycle
   assert.equal(String(els.statIssuedTotal.textContent), '1');

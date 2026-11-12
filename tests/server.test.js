@@ -23,7 +23,7 @@ const FULL_SETTINGS = {
   permanentDuration: '876000h', banScenario: 'manual/web-ui', banReasonPrefix: 'permaban',
   historyRetentionDays: 90, notificationsEnabled: true, startMinimized: true, initialized: false,
   // The server e2e tests keep the imported list off — no real download in a test, and mock bans stay exactly rule-bans.
-  blocklistEnabled: false, blocklistUrl: '', blocklistRefreshMinutes: 60, blocklistUnbanMinutes: 1440, blocklistCapPerCycle: 200,
+  blocklists: [],   // canonical rows for the dedicated tab; server e2e keeps them off — no network downloads, mock bans stay exactly rule-bans
   scoring: { recidivistBanThreshold: 3, aggressiveEventThreshold: 1000, aggressiveScenarioThreshold: 2,
     eventWeight: 1, scenarioWeight: 100, banWeight: 500, safeCountryBanEnabled: true, safeCountryBanScore: 2500 },
 };
@@ -322,9 +322,8 @@ test('Server_SettingsRoundTrip', async () => {
     const saved = await postJson(port, '/api/settings', {
       safeCountries: ['FR', 'DE'], scoring: { recidivistBanThreshold: 4, safeCountryBanScore: 3000 },
       pollIntervalSeconds: 120, notifyWebhookUrl: 'https://ntfy.sh/my-topic', notifyFormat: 'json',
-      // The imported blocklist round-trips through the same sanitization as every other numeric field.
-      blocklistEnabled: true, blocklistUrl: 'https://example.test/abuseipdb-s100-7d.ipv4',
-      blocklistRefreshMinutes: 30, blocklistUnbanMinutes: 90, blocklistCapPerCycle: 150,
+      // Dedicated Blocklists tab rows round-trip through canonical sanitization (URL, scenario, floors).
+      blocklists: [{ url: 'https://example.test/abuseipdb-s100-7d.ipv4', enabled: true, banScenario: 'blocklist/permaban', refreshMinutes: 30, unbanMinutes: 90, capPerCycle: 150 }],
     });
     assert.equal(saved.ok, true);
 
@@ -338,12 +337,9 @@ test('Server_SettingsRoundTrip', async () => {
     assert.equal(state.settings.notifyWebhookUrl, 'https://ntfy.sh/my-topic');
     assert.equal(state.settings.notifyFormat, 'json');
 
-    // The blocklist settings live in the same saved file as everything else: enabled, URL, minutes, cap.
-    assert.equal(state.settings.blocklistEnabled, true);
-    assert.equal(state.settings.blocklistUrl, 'https://example.test/abuseipdb-s100-7d.ipv4');
-    assert.equal(state.settings.blocklistRefreshMinutes, 30);
-    assert.equal(state.settings.blocklistUnbanMinutes, 90);
-    assert.equal(state.settings.blocklistCapPerCycle, 150);
+    // The saved rows live in the same settings file as everything else: canonical URL, enabled flag, own schedule/grace/cap.
+    assert.equal(state.settings.blocklists.length, 1);
+    assert.deepEqual(state.settings.blocklists[0], { url: 'https://example.test/abuseipdb-s100-7d.ipv4', enabled: true, banScenario: 'blocklist/permaban', refreshMinutes: 30, unbanMinutes: 90, capPerCycle: 150 });
 
     const raw = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
     assert.match(raw, /"notifyWebhookUrl": "https:\/\/ntfy\.sh\/my-topic"/);
@@ -374,6 +370,7 @@ test('Server_EnvSeedsTheFirstRunAndNothingElseAfterwards', async () => {
     PERMABAN_POLL_SECONDS: '45',
     PERMABAN_BLOCKLIST_ENABLED: '1',
     PERMABAN_BLOCKLIST_URL: 'https://example.test/abuseipdb-s100-3d.ipv4',
+    PERMABAN_BLOCKLIST_SCENARIO: 'blocklist/custom7d',   // seeds the first row's own scenario
     PERMABAN_BLOCKLIST_REFRESH_MINUTES: '90',
     PERMABAN_BLOCKLIST_UNBAN_MINUTES: '0',
     PERMABAN_BLOCKLIST_CAP_PER_CYCLE: '250',
@@ -387,17 +384,19 @@ test('Server_EnvSeedsTheFirstRunAndNothingElseAfterwards', async () => {
     assert.equal(state.settings.pollIntervalSeconds, 45);
     assert.equal(state.settings.notifyWebhookUrl, 'https://ntfy.sh/permaban-test');
 
-    // A compose file can pick the imported list, its schedule, and the unban window at first run too.
-    assert.equal(state.settings.blocklistEnabled, true);
-    assert.equal(state.settings.blocklistUrl, 'https://example.test/abuseipdb-s100-3d.ipv4');
-    assert.equal(state.settings.blocklistRefreshMinutes, 90);
-    assert.equal(state.settings.blocklistUnbanMinutes, 0);       // 0 is a valid seed: unban the cycle an IP leaves the list
-    assert.equal(state.settings.blocklistCapPerCycle, 250);
+    // A compose file seeds the FIRST row of the dedicated list table at first run (URL, enabled, own schedule/grace/cap).
+    const row = state.settings.blocklists[0];
+    assert.equal(row.url, 'https://example.test/abuseipdb-s100-3d.ipv4');
+    assert.equal(row.banScenario, 'blocklist/custom7d');   // env seeds the first row's own scenario too
+    assert.equal(row.enabled, true);
+    assert.equal(row.refreshMinutes, 90);
+    assert.equal(row.unbanMinutes, 0);       // 0 is a valid seed: unban as soon as no refreshing list owns an IP
+    assert.equal(row.capPerCycle, 250);
 
     const seededLine = state.activity.find((a) => a.line.startsWith('Settings seeded from environment'));
     assert.ok(seededLine, 'the launch did not say what it seeded');
     for (const k of ['baseUrl', 'username', 'password', 'notifyWebhookUrl', 'pollIntervalSeconds',
-      'blocklistEnabled', 'blocklistUrl', 'blocklistRefreshMinutes', 'blocklistUnbanMinutes', 'blocklistCapPerCycle'])
+      'blocklists[0].url', 'blocklists[0].banScenario', 'blocklists[0].enabled', 'blocklists[0].refreshMinutes', 'blocklists[0].unbanMinutes', 'blocklists[0].capPerCycle'])
       assert.ok(seededLine.line.includes(k), `${k} is missing from the seed line`);
 
     // The seeded credentials are enough to run a real cycle against the mock.
@@ -408,6 +407,8 @@ test('Server_EnvSeedsTheFirstRunAndNothingElseAfterwards', async () => {
     // The seeded list URL is not reachable in this test: the fetch fails, the cycle reports it, and nothing changes —
     // a failed download never bans or unbans anything (the tracked set stays exactly as it was).
     assert.equal(r.blocklistSkip, 'fetch failed');
+    assert.equal(r.blocklists[0].url, 'https://example.test/abuseipdb-s100-3d.ipv4');   // per-list detail reports the row that tried and its status
+    assert.equal(r.blocklists[0].skip, 'fetch failed');
     assert.equal(r.blocklistTracked, 0);
     assert.equal(mock.bans.length, 1);                            // the one ban this cycle issued is the rule auto-ban
 
@@ -423,10 +424,9 @@ test('Server_EnvSeedsTheFirstRunAndNothingElseAfterwards', async () => {
       const after = await getJson(p2, '/api/state');
       assert.equal(after.settings.pollIntervalSeconds, 90);       // saved in the UI → env seed ignored
       assert.equal(after.settings.notifyWebhookUrl, '');          // cleared in the UI → env seed ignored
-      // The seeded blocklist settings persisted on Save and survive the restart (the store's schedule is their own file).
-      assert.equal(after.settings.blocklistEnabled, true);
-      assert.equal(after.settings.blocklistUrl, 'https://example.test/abuseipdb-s100-3d.ipv4');
-      assert.equal(after.settings.blocklistRefreshMinutes, 90);
+      // The seeded list rows persisted on Save and survive the restart (the store's per-URL schedule stamps are their own file).
+      assert.equal(after.settings.blocklists.length, 1);
+      assert.deepEqual(after.settings.blocklists[0], { url: 'https://example.test/abuseipdb-s100-3d.ipv4', enabled: true, banScenario: 'blocklist/custom7d', refreshMinutes: 90, unbanMinutes: 0, capPerCycle: 250 });
       assert.ok(!after.activity.some((a) => a.line.startsWith('Settings seeded from environment')));
     } finally {
       second.kill();

@@ -4,6 +4,7 @@ import { scoreProfiles } from './scoring.js';
 import { evaluate, describeCandidate, Action } from './rules.js';
 import { SourceAuthException, SourceException } from './source.js';
 import { fetchBlocklist, parseBlocklist } from './blocklist.js';
+import { cleanBlockList } from './settings.js';
 
 const DASHBOARD_DAYS = 14;
 const DASHBOARD_TOP = 5;
@@ -25,107 +26,128 @@ export class Pipeline {
 
   setSource(source) { this.source = source; }
 
-  /// The imported-list step, run right after the liveness sync (so `activeDecisions()` is current). Download when due:
-  /// no fetch recorded for this URL yet, or `blocklistRefreshMinutes` elapsed. A failed fetch only logs — tracked state
-  /// and bans survive untouched, because nothing here may unban anything on a bad HTTP day: an IP leaves the app's ban
-  /// list only when a **real refreshed listing** is missing it for `blocklistUnbanMinutes`.
-  /// Bans are permanent (same duration/prefix/scenario as every auto-ban) and count in the lifetime counter. A ban
-  /// already on the server that the list did not issue stays untouched: this step owns only what it issued, so leaving
-  /// the list never unbans a decision created by someone else. `blocklistCapPerCycle` bounds one cycle's API load —
-  /// a big list is applied over several cycles instead of flooding the Web UI with thousands of POSTs at once.
+  /// Multiple imported lists — run right after the liveness sync (so `activeDecisions()` is current). Each enabled row
+  /// downloads on its own schedule (`refreshMinutes`; a URL never fetched is due immediately), permanent-bans every IP it
+  /// claims with the app's duration/prefix/scenario, and counts in the lifetime counter. A ban already on the server that no
+  /// list issued stays untouched: this step owns only what it issued, so leaving the lists never unbans a foreign decision.
+  /// Union rule for removals — an entry loses its source with each refreshing list that misses it; a global absence window opens
+  /// **only** when every refreshing list has stopped claiming the IP (`sources` empty), and once open, the longest configured
+  /// `unbanMinutes` among the lists currently downloading wins: a conservative list never lets a fast one unban an IP it still owns.
+  /// A failed fetch only logs — tracked state, bans, counters and every URL's schedule stamp survive untouched, because nothing
+  /// here may unban anything on a bad HTTP day. `capPerCycle` bounds each URL's own cycle load (bans + unbans), so a big list lands
+  /// over several cycles instead of flooding the Web UI with thousands of POSTs at once. Presence bookkeeping is free: an IP that a
+  /// refreshed listing owns always joins its source set; cap only gates network bans/unbans.
   async syncBlocklist(s, result) {
-    const url = String(s.blocklistUrl ?? '').trim();
-    const enabled = !!s.blocklistEnabled;
+    const configs = [];
+    for (const raw of s.blocklists ?? []) {
+      const cfg = cleanBlockList(raw);   // floors + trim: exactly the canonical row the Settings tab saves
+      if (cfg.url && cfg.enabled) configs.push(cfg);
+    }
 
-    result.blocklistEnabled = enabled;
-    result.blocklistUrl = url;
     result.blocklistAdded = 0;
     result.blocklistUnbanned = 0;
     result.blocklistTracked = this.store.blocklistSnapshot().tracked;
+    result.blocklists = [];              // per-list detail for the Blocklists tab: schedule stamp, fetch status, added/unbanned counts
 
-    if (!enabled || !url) { result.blocklistSkip = 'disabled'; return { added: [], unbanned: [] }; }
+    if (configs.length === 0) { result.blocklistSkip = 'disabled'; return { added: [], unbanned: [] }; }
 
-    // The schedule lives in `state.json`: restarts keep it, and a URL change refetches immediately (see setBlockSync).
-    const refreshMs = Math.max(1, Math.floor(Number(s.blocklistRefreshMinutes) ?? 60)) * 60_000;
-    const lastAt = this.store.blockSyncUrl === url && this.store.blockSyncAt ? Date.parse(this.store.blockSyncAt) : null;
-    if (Number.isFinite(lastAt) && Date.now() - lastAt < refreshMs) { result.blocklistSkip = 'not due'; return { added: [], unbanned: [] }; }
+    const fetched = [];
+    let successCount = 0;
+    let anyFetchFailed = false;
 
-    let text;
-    try {
-      text = await this.blockFetcher(url);
-    } catch (e) {
-      this.log(`Blocklist fetch failed (${url}): ${e.message} — tracked state and bans kept.`);
-      result.blocklistSkip = 'fetch failed';
-      return { added: [], unbanned: [] };
+    // 1) Fetch pass: each URL's schedule lives per row in `state.json`; a restart resumes every stamp, a URL never recorded is due.
+    for (const cfg of configs) {
+      const url = cfg.url;
+      const refreshMs = Math.max(1, cfg.refreshMinutes) * 60_000;
+      const lastAt = this.store.listSyncAt(url);
+      const detail = { url, enabled: true, syncAt: lastAt ?? null, added: 0, unbanned: 0, skip: null };
+      result.blocklists.push(detail);
+
+      const last = Number.isFinite(Date.parse(lastAt ?? '')) ? Date.parse(lastAt) : null;
+      if (last !== null && Date.now() - last < refreshMs) { detail.skip = 'not due'; continue; }
+
+      let text;
+      try { text = await this.blockFetcher(url); }
+      catch (e) { anyFetchFailed = true; detail.skip = 'fetch failed'; this.log(`Blocklist fetch failed (${url}): ${e.message} — tracked state and bans kept.`); continue; }
+
+      successCount++;
+      const nowIso = new Date().toISOString();
+      const ips = parseBlocklist(text);
+      this.store.setListSync(url, nowIso);   // schedule stamp only for a real fetch
+      detail.syncAt = nowIso;
+      fetched.push({ cfg, url, ips, remaining: Math.max(1, cfg.capPerCycle), detail });
     }
 
-    const ips = parseBlocklist(text);
-    const cap = Math.max(1, Math.floor(Number(s.blocklistCapPerCycle) ?? 200));
-    const unbanMs = Math.max(0, Math.floor(Number(s.blocklistUnbanMinutes) ?? 0)) * 60_000;
+    const addedAll = [];
+    const unbannedAll = [];
 
-    // Bans: a fresh IP on the list, and a re-added IP whose window was closed. Active server decisions count as
-    // "already blocked": no POST is issued for them, they are not adopted by the list (see above).
-    const byIp = new Map(this.store.activeDecisions().map((d) => [d.ip, d]));
-    const added = [];
-    let actions = 0;
+    if (successCount > 0) {
+      const byIp = new Map(this.store.activeDecisions().map((d) => [d.ip, d]));   // "already blocked" — foreign decisions are never adopted
 
-    for (const ip of ips) {
-      if (actions >= cap) break;
-      const entry = this.store.blockEntry(ip);
-      if (!entry) {
-        if (byIp.has(ip)) continue;                       // blocked by someone else — the list does not adopt it
-        if (this.store.isAutoBanned(ip)) { this.store.recordBlockBan(ip); continue; }   // app-banned by rules: adopt, no POST
-        const reason = `${s.banReasonPrefix}: imported blocklist`;
-        const ban = await this.source.ban(ip, s.permanentDuration, reason, s.banScenario);
-        if (!ban.success) { this.log(`BLOCKLIST BAN FAILED ${ip}: ${ban.message}`); continue; }
-        this.store.recordAutoBan(ip, null, '', 0, reason);   // lifetime counter + "by app" flag, same as every app ban
-        this.store.recordBlockBan(ip);
-        added.push(ip); actions++;
-        this.log(`BLOCKLIST-BANNED ${ip} — imported list (${url})`);
-      } else if (entry.removedAt) {
-        this.store.recordBlockBan(ip);                       // present again: close its removal window
-        if (!byIp.has(ip)) {
-          const reason = `${s.banReasonPrefix}: imported blocklist`;
-          const ban = await this.source.ban(ip, s.permanentDuration, reason, s.banScenario);
-          if (ban.success) {
-            this.store.recordAutoBan(ip, null, '', 0, reason);
-            added.push(ip); actions++;
-            this.log(`BLOCKLIST-BANNED ${ip} — back on the imported list (${url})`);
-          } else this.log(`BLOCKLIST BAN FAILED ${ip}: ${ban.message}`);
+      for (const f of fetched) {
+        for (const ip of f.ips) {
+          const orig = this.store.blockEntry(ip);
+          if (!orig) {
+            if (f.remaining <= 0) continue;                    // cap spent: nothing to ban this cycle, source bookkeeping stays free on re-appearance
+            if (byIp.has(ip)) continue;                        // blocked by someone else — the lists do not adopt it
+            if (this.store.isAutoBanned(ip)) { this.store.recordBlockBan(ip, f.url); continue; }   // app-banned by rules: adopt, no POST
+            const reason = `${s.banReasonPrefix}: imported blocklist`;
+            const ban = await this.source.ban(ip, s.permanentDuration, reason, f.cfg.banScenario ?? s.banScenario);
+            if (!ban.success) { this.log(`BLOCKLIST BAN FAILED ${ip}: ${ban.message}`); continue; }
+            this.store.recordAutoBan(ip, null, '', 0, reason);   // lifetime counter + "by app" flag, same as every app ban
+            this.store.recordBlockBan(ip, f.url);
+            addedAll.push(ip); f.remaining--; f.detail.added++;
+            this.log(`BLOCKLIST-BANNED ${ip} — imported list (${f.url})`);
+          } else {
+            const wasAbsent = !!orig.removedAt;                // a global window closed by this refreshed listing
+            this.store.recordBlockBan(ip, f.url);              // presence bookkeeping: join the source set / close the window (free)
+            if (!wasAbsent || byIp.has(ip)) continue;         // normal present entry, or its ban is already live on the server
+            if (f.remaining <= 0) continue;
+            const reason = `${s.banReasonPrefix}: imported blocklist`;
+            const ban = await this.source.ban(ip, s.permanentDuration, reason, f.cfg.banScenario ?? s.banScenario);
+            if (ban.success) {
+              this.store.recordAutoBan(ip, null, '', 0, reason);
+              addedAll.push(ip); f.remaining--; f.detail.added++;
+              this.log(`BLOCKLIST-BANNED ${ip} — back on the imported list (${f.url})`);
+            } else this.log(`BLOCKLIST BAN FAILED ${ip}: ${ban.message}`);
+          }
         }
       }
-    }
 
-    // Removals: entries missing from this refreshed list. The first absence stamps `removedAt`; the unban fires once
-    // the configured window has run, by decision id read from the live liveness-synced set.
-    const unbanned = [];
-    for (const e of [...this.store.blockTracked()]) {
-      if (actions >= cap) break;
-      if (ips.has(e.ip)) continue;                          // still on the list → nothing to do here
-      this.store.markBlockRemoved(e.ip);
-      const entry = this.store.blockEntry(e.ip);            // first absence sets removedAt in this cycle: not eligible yet
-      if (!entry.removedAt) continue;
-      if (Date.parse(entry.removedAt) + unbanMs > Date.now()) continue;   // window still open
+      // 2) Removal pass over every tracked entry, after bans so re-adds have closed their windows. For each refreshing list that misses the IP, its source ends; a global window opens only when no refreshing list claims it any more (`sources` empty), and the unban fires once the **longest** configured grace among this cycle's downloads has run out. A source with an open window from earlier cycles stays eligible: every refreshing list confirms the absence in its real listing, so the unban runs under whichever of those URLs still has cap left.
+      const tracked = [...this.store.blockTracked()];
+      const unbanMsMax = Math.max(0, ...fetched.map((f) => f.cfg.unbanMinutes)) * 60_000;   // union rule: longest wins
 
-      const d = byIp.get(e.ip);
-      if (!d) {                                              // no active decision to delete → the list's ownership is done
-        this.store.completeBlockUnban(e.ip);
-        continue;
+      for (const e of tracked) {
+        const relevant = fetched.filter((f) => !f.ips.has(e.ip));   // refreshing lists that all confirm this IP is missing
+        for (const f of relevant) this.store.removeBlockSource(e.ip, f.url);   // bookkeeping: take back the URL's source; free, no cap consumed
+
+        const entry = this.store.blockEntry(e.ip);
+        if (!entry || !entry.removedAt) continue;             // a refreshing list owns it → window closed / never stamped
+        if (Date.parse(entry.removedAt) + unbanMsMax > Date.now()) continue;   // the longest grace among the downloading lists is open
+
+        const f = relevant.find((x) => x.remaining > 0);      // one of these URLs' cap pays for this unban, counted against that list
+        if (!f) continue;                                     // no URL has room left: ownership stays with its (closed/kept) sources
+        const d = byIp.get(e.ip);
+        if (!d) {                                             // no active decision to delete → every refreshing list's ownership is done
+          this.store.completeBlockUnban(e.ip);
+          continue;
+        }
+        const r = await this.source.unban(d.id);
+        if (r.success) {
+          this.store.completeBlockUnban(e.ip);
+          unbannedAll.push(e.ip); f.remaining--; f.detail.unbanned++;
+          this.log(`BLOCKLIST-UNBANNED ${e.ip} — missing from every refreshing list (${f.url})`);
+        } else this.log(`BLOCKLIST UNBAN FAILED ${e.ip}: ${r.message}`);
       }
-      const r = await this.source.unban(d.id);
-      if (r.success) {
-        this.store.completeBlockUnban(e.ip);
-        unbanned.push(e.ip); actions++;
-        this.log(`BLOCKLIST-UNBANNED ${e.ip} — removed from the imported list (${url})`);
-      } else this.log(`BLOCKLIST UNBAN FAILED ${e.ip}: ${r.message}`);
+
+      result.blocklistAdded = addedAll.length;
+      result.blocklistUnbanned = unbannedAll.length;
+      result.blocklistTracked = this.store.blocklistSnapshot().tracked;   // after bans/removals, what the lists own now
     }
 
-    result.blocklistAdded = added.length;
-    result.blocklistUnbanned = unbanned.length;
-    result.blocklistTracked = this.store.blocklistSnapshot().tracked;   // after removals, what the list owns now
-    result.blocklistSkip = null;
-    this.store.setBlockSync(url, new Date().toISOString());            // schedule stamp only for a real fetch
-    return { added, unbanned };
+    result.blocklistSkip = successCount > 0 ? null : (anyFetchFailed ? 'fetch failed' : 'not due');
+    return { added: addedAll, unbanned: unbannedAll };
   }
 
   start() {

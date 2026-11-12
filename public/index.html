@@ -25,6 +25,7 @@
     <button data-view="candidates">Candidates</button>
     <button data-view="banned">Banned</button>
     <button data-view="activity">Activity log</button>
+    <button data-view="blocklists">Blocklists</button>
     <button data-view="settings">Settings</button>
   </nav>
 
@@ -103,6 +104,25 @@
       <div id="activityLog" class="log"></div>
     </section>
 
+    <!-- ── Blocklists ───────────────────────────────────────────── -->
+    <section id="view-blocklists" class="view">
+      <div class="toolbar">
+        <button id="addBlockListBtn" class="primary" title="Add one list row (URL, schedule, grace window, per-cycle cap)">+ Add list</button>
+        <button id="blockSaveBtn">Save lists</button>
+        <span id="blockMsg" class="msg"></span>
+      </div>
+      <table class="grid"><thead><tr>
+        <th title="Ban every IP in this refreshed listing, permanently, with the app's ban length/reason prefix and this row's own scenario.">Ban list</th>
+        <th>List URL</th>
+        <th title="Ban scenario sent on each ban issued by THIS row (default: blocklist/permaban).">Scenario</th>
+        <th title="How often this one URL is downloaded — its own schedule, independent from every other row. A URL never fetched yet fetches on the next cycle.">Refresh (min ≥ 1)</th>
+        <th title="Global absence window for THIS row: an IP leaves the app's ban list only when **every** refreshing list has stopped claiming it, and once that global window opens, the longest configured grace among the lists currently downloading wins (union rule). 0 = unban as soon as no refreshing list owns it.">Unban after absence (min ≥ 0)</th>
+        <th title="Cap of bans + unbans issued for THIS URL in one cycle, so a big listing lands over several cycles instead of flooding the Web UI at once. Presence bookkeeping is free; cap gates network bans/unbans only.">Per-cycle cap</th>
+        <th></th>
+      </tr></thead><tbody id="blockRows"></tbody></table>
+      <div class="hint muted">Bans already on the server that no list issued are never adopted, so leaving the lists never unbans a foreign decision. A failed fetch only logs: tracked state, bans and every URL's own schedule stamp survive untouched. Private ranges (RFC1918/CGNAT/link-local/multicast) and IPv6 loopback/solo/ULA/multicast are dropped by the parser.</div>
+    </section>
+
     <!-- ── Settings ──────────────────────────────────────────────── -->
     <section id="view-settings" class="view">
       <div class="cols">
@@ -165,18 +185,6 @@
             <label>Retention days<input id="fRet" type="number" min="1" /></label>
           </div>
 
-          <div class="card">
-            <h3>Imported blocklist</h3>
-            <label class="switch"><input type="checkbox" id="fBlockEnabled" /> Ban every IP in the list (permanent, same length as an auto-ban)</label>
-            <label title="One IP per line is read; comments after # and CIDR prefixes are accepted. The default is borestad/blocklist-abuseipdb, 30-day ~100% confidence IPv4 list."
-                   >List URL<input id="fBlockUrl" /></label>
-            <label>Refresh every (minutes)<input id="fBlockRefreshMin" type="number" min="1" /></label>
-            <label title="Grace window measured from the first refresh that found the IP missing. 0 = unban the same cycle it leaves the list."
-                   >Unban after absence (minutes)<input id="fBlockUnbanMin" type="number" min="0" /></label>
-            <label title="Cap of bans + unbans issued by the list in one cycle, so a 140k list lands over several cycles instead of flooding the Web UI at once."
-                   >Per-cycle cap<input id="fBlockCap" type="number" min="1" /></label>
-            <div class="hint muted">The app bans what the list owns and unbans it when it leaves for the configured window. Bans already issued by someone else are never adopted, so leaving the list never unbans them. First run: seed with <code>PERMABAN_BLOCKLIST_URL</code>, <code>_ENABLED</code>, <code>_REFRESH_MINUTES</code>, <code>_UNBAN_MINUTES</code>, <code>_CAP_PER_CYCLE</code>.</div>
-          </div>
 
           <div class="card">
             <h3>Data folder</h3>

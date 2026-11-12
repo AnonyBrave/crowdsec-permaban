@@ -70,9 +70,8 @@ export class EventStore {
     this.expiredOverrides = new Set();  // decision ids this app marked expired locally
     this.deletedKeys = new Set();       // rows retention removed locally
     this.bansIssuedTotal = 0;           // lifetime count of permanent bans issued by this app, persisted as `autoBansTotal`
-    this.blockBans = new Map();         // imported-list IPs the app manages: ip -> {ip, addedAt, removedAt}
-    this.blockSyncAt = null;            // last successful list fetch (ISO), persisted so a restart keeps its schedule
-    this.blockSyncUrl = null;           // which URL that fetch came from — changing the list resets the schedule on purpose
+    this.blockBans = new Map();         // imported-list IPs the app manages: ip -> {ip, addedAt, removedAt, sources:[urls]}
+    this.listSyncs = new Map();          // url -> ISO stamp of that URL's last successful fetch; persisted so restarts keep every schedule
     this.appendedSinceCompact = 0;
   }
 
@@ -100,11 +99,22 @@ export class EventStore {
       // A counter written by an earlier version, a bad value, or none at all → start from zero; never throw on load.
       const total = Number(st.autoBansTotal ?? 0);
       if (Number.isFinite(total) && total >= 0) this.bansIssuedTotal = Math.floor(total);
-      // The imported blocklist: IPs the app manages, when they landed, when they were first seen missing. A restart
-      // resumes from here — an IP that left the list yesterday is unbanned on schedule today, not forgotten.
-      for (const b of st.blockBans ?? []) this.blockBans.set(b.ip, { ip: b.ip, addedAt: b.addedAt ?? null, removedAt: b.removedAt ?? null });
-      if (typeof st.blockSyncAt === 'string' && st.blockSyncAt) this.blockSyncAt = st.blockSyncAt;
-      if (typeof st.blockSyncUrl === 'string' && st.blockSyncUrl) this.blockSyncUrl = st.blockSyncUrl;
+      // The imported lists: IPs the app manages, which URLs own them, when they landed and — once an IP is missing from
+      // every refreshing list — when that was first seen. A restart resumes from here (unban windows keep running); a
+      // single-list `state.json` migrates into one row owned by its recorded URL with its schedule stamp.
+      const legacyAt = typeof st.blockSyncAt === 'string' && st.blockSyncAt ? st.blockSyncAt : null;
+      const legacyUrl = typeof st.blockSyncUrl === 'string' && st.blockSyncUrl ? st.blockSyncUrl : null;
+      for (const b of st.blockBans ?? []) {
+        const sources = Array.isArray(b.sources) ? [...new Set(b.sources.map((u) => String(u)))] : [];
+        if (!sources.length && legacyUrl) sources.push(legacyUrl);   // an entry from the single-list era belongs to its URL
+        this.blockBans.set(b.ip, { ip: b.ip, addedAt: b.addedAt ?? null, removedAt: b.removedAt ?? null, sources });
+      }
+      for (const e of st.blockLists ?? []) {   // canonical per-URL schedule stamps
+        if (!e || typeof e.url !== 'string' || !e.url) continue;
+        const at = typeof e.at === 'string' && e.at ? e.at : null;
+        if (at) this.listSyncs.set(e.url, at);
+      }
+      if (legacyUrl && legacyAt && !this.listSyncs.has(legacyUrl)) this.listSyncs.set(legacyUrl, legacyAt);
     } catch { /* no state yet */ }
 
     // Re-apply the local deltas recorded by earlier launches.
@@ -183,22 +193,26 @@ export class EventStore {
 
   markNotified(ips) { for (const ip of ips) this.notified.add(ip); }
 
-  // ── imported blocklist ───────────────────────────────────────────────
-  /// An IP from the imported list that this app has banned. The permanent ban itself goes through `recordAutoBan`
-  /// (same lifetime counter, same "by app" flag in the Banned view); here we only track what the list owns: when it
-  /// landed and — once missing from a refreshed list — when it was first seen gone, so the configured unban delay is measured.
-  recordBlockBan(ip) {
+  // ── imported lists (multiple URLs) ───────────────────────────────────────
+  /// An IP owned by one of the imported lists. The permanent ban itself goes through `recordAutoBan` (same lifetime counter,
+  /// same "by app" flag in the Banned view); here we only track what each URL owns: which list added the IP and — once it is
+  /// missing from **every** refreshing list (`sources` empty) — when that absence was first seen, so the configured unban window runs.
+  recordBlockBan(ip, url) {
     if (this.readOnly) return;   // ban issued on the server, local records skipped like every read-only launch
-    const entry = this.blockBans.get(ip) ?? { ip, addedAt: ISO(Date.now()), removedAt: null };
-    entry.removedAt = null;      // present again after a removal window → back on the list
+    const entry = this.blockBans.get(ip) ?? { ip, addedAt: ISO(Date.now()), removedAt: null, sources: [] };
+    if (!entry.sources.includes(url)) entry.sources.push(url);
+    entry.removedAt = null;      // present in a refreshed list → close the global removal window
     this.blockBans.set(ip, entry);
   }
 
-  /// First sighting that an IP is absent from the refreshed list. Returns true when this cycle marks it.
-  markBlockRemoved(ip) {
+  /// One URL's refreshed listing no longer contains `ip`, so that URL stops owning it. Returns true **only** when this is the
+  /// first sighting of a *global* absence (sources empty): any source left means another list still owns the IP.
+  removeBlockSource(ip, url) {
     if (this.readOnly) return false;
     const e = this.blockBans.get(ip);
-    if (!e || e.removedAt) return false;
+    if (!e || !e.sources.includes(url)) return false;
+    e.sources = e.sources.filter((u) => u !== url);
+    if (e.sources.length > 0 || e.removedAt) return false;   // a source remains, or the window is already stamped
     e.removedAt = ISO(Date.now());
     return true;
   }
@@ -210,14 +224,14 @@ export class EventStore {
     this.autoBans.delete(ip);   // "by app" flag drops with it, same as any unban
   }
 
-  /// The schedule stamp of the last successful list fetch, and the URL it came from. `syncBlocklist` reads both: a new
-  /// URL is fetched on its next cycle whatever the old schedule says; switching back to a list that ran earlier keeps
-  /// its tracked IPs (unbans already done stay done) and refetches immediately.
-  setBlockSync(url, iso) { if (!this.readOnly) { this.blockSyncUrl = url; this.blockSyncAt = iso; } }
+  /// Schedule stamp for one URL. `syncBlocklist` reads it per list: a URL never fetched is due immediately whatever other
+  /// URLs' schedules say; a URL change in the UI is just this map, so switching lists refetches independently (see setListSync).
+  setListSync(url, iso) { if (!this.readOnly && url) this.listSyncs.set(url, iso); }
+  listSyncAt(url) { return this.listSyncs.get(url) ?? null; }
 
   blockTracked() { return [...this.blockBans.values()]; }
-  /// One tracked list IP (undefined when the list does not own it). The pipeline reads entries directly — a 140k list
-  /// must stay O(1) per lookup, never a scan of the tracked map.
+  /// One tracked list IP (undefined when no list owns it), with `sources` = which URLs currently own it. The pipeline reads
+  /// entries directly — a 140k list must stay O(1) per lookup, never a scan of the tracked map.
   blockEntry(ip) { return this.blockBans.get(ip); }
 
   blocklistSnapshot() {
@@ -237,8 +251,7 @@ export class EventStore {
         expiredOverrides: [...this.expiredOverrides],
         deletedKeys: [...this.deletedKeys],
         autoBansTotal: this.bansIssuedTotal,
-        blockSyncAt: this.blockSyncAt,
-        blockSyncUrl: this.blockSyncUrl,
+        blockLists: [...this.listSyncs.entries()].map(([url, at]) => ({ url, at })).sort((a, b) => a.url.localeCompare(b.url)),
         blockBans: [...this.blockBans.values()],
       }, null, 2));
 

@@ -10,6 +10,94 @@ const n0 = (x) => nf.format(Math.round(x));
 let lastCycle = null;
 let settings = null;
 
+// Dedicated Blocklists tab: multiple imported lists, each with its own URL, schedule, global grace window, and per-cycle cap.
+// `uiLists` is the working rows copy painted by fillSettingsForm from `/api/state`; a real browser keeps live row DOM refs in
+// `rowRefs`, so Save reads exactly what the user typed. The offline UI tests run under a minimal shim with no createElement —
+// there rendering falls back to innerHTML strings, and collectBlocklists sanitizes `uiLists` directly. Same floors as server.js:
+// refresh/cap ≥ 1 (fallbacks 60 / 200), unban grace ≥ 0 (fallback 1440); a row without URL drops at save time. Each row carries its own ban scenario
+// (`blocklist/permaban` default).
+const BL_DEFAULT = { url: '', enabled: true, banScenario: 'blocklist/permaban', refreshMinutes: 60, unbanMinutes: 1440, capPerCycle: 200 };
+let uiLists = [];
+let rowRefs = [];
+
+const cleanBlockRow = (r) => {
+  const floor = (v, min, def) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n >= min ? n : def; };
+  const str = (v, def) => { const s = String(v ?? '').trim(); return s.length > 0 ? s : def; };
+  return {
+    url: String(r?.url ?? '').trim(),
+    enabled: !!r?.enabled,
+    banScenario: str(r?.banScenario, 'blocklist/permaban'),   // per-row scenario, editable in the dedicated tab
+    refreshMinutes: floor(r?.refreshMinutes, 1, 60),
+    unbanMinutes: floor(r?.unbanMinutes, 0, 1440),
+    capPerCycle: floor(r?.capPerCycle, 1, 200),
+  };
+};
+
+function renderBlockRows() {
+  const host = $('blockRows');
+  if (!host) return;                                  // static pairing keeps blockRows in index.html; this guard is for exotic shims
+  rowRefs = [];
+  host.innerHTML = '';
+  const realDom = typeof document.createElement === 'function' && typeof host.appendChild === 'function';
+
+  uiLists.forEach((obj, i) => {
+    if (realDom) {
+      const tr = document.createElement('tr');
+      const cell = () => { const td = document.createElement('td'); tr.appendChild(td); return td; };
+
+      const cbx = document.createElement('input'); cbx.type = 'checkbox'; cbx.checked = !!obj.enabled;
+      cbx.addEventListener('change', () => { obj.enabled = cbx.checked; });
+      cell().appendChild(cbx);
+
+      const url = document.createElement('input'); url.value = String(obj.url ?? ''); url.title = obj.url || 'add a URL (one IP per line is read)';
+      url.addEventListener('input', () => { obj.url = url.value.trim(); });
+      cell().appendChild(url);
+
+      const scen = document.createElement('input'); scen.value = obj.banScenario || 'blocklist/permaban'; scen.title = 'Ban scenario for this list (default: blocklist/permaban)';
+      scen.addEventListener('input', () => { obj.banScenario = scen.value.trim(); });
+      cell().appendChild(scen);
+
+      const refresh = document.createElement('input'); refresh.type = 'number'; refresh.min = '1'; refresh.value = obj.refreshMinutes ?? 60;
+      refresh.addEventListener('input', () => { obj.refreshMinutes = Math.floor(Number(refresh.value)); });
+      cell().appendChild(refresh);
+
+      const unban = document.createElement('input'); unban.type = 'number'; unban.min = '0'; unban.value = obj.unbanMinutes ?? 1440;
+      unban.addEventListener('input', () => { obj.unbanMinutes = Math.floor(Number(unban.value)); });
+      cell().appendChild(unban);
+
+      const cap = document.createElement('input'); cap.type = 'number'; cap.min = '1'; cap.value = obj.capPerCycle ?? 200;
+      cap.addEventListener('input', () => { obj.capPerCycle = Math.floor(Number(cap.value)); });
+      cell().appendChild(cap);
+
+      const rm = document.createElement('button'); rm.textContent = '×'; rm.title = 'Remove this list row (saves on Save lists)';
+      rm.addEventListener('click', () => { uiLists.splice(i, 1); renderBlockRows(); $('blockMsg').textContent = 'List row removed — press Save lists to apply.'; });
+      cell().appendChild(rm);
+
+      host.appendChild(tr);
+      rowRefs.push({ cb: cbx, urlInp: url, scenInp: scen, refreshInp: refresh, unbanInp: unban, capInp: cap });
+    } else {
+      // The Node UI shim has no createElement; tests drive `uiLists` through the exported helpers and inspect innerHTML.
+      host.innerHTML += `<tr><td class="bl-enabled"><input type="checkbox"${obj.enabled ? ' checked' : ''} /></td>`
+        + `<td class="bl-url">${esc(String(obj.url ?? ''))}</td>`
+        + `<td class="bl-scenario">${esc(String(obj.banScenario || 'blocklist/permaban'))}</td>`
+        + `<td>${String(obj.refreshMinutes ?? 60)}</td><td>${String(obj.unbanMinutes ?? 1440)}</td><td>${String(obj.capPerCycle ?? 200)}</td>`
+        + '<td class="bl-remove"><button>×</button></td></tr>';
+    }
+  });
+}
+
+function addBlockList() {
+  uiLists.push(JSON.parse(JSON.stringify(BL_DEFAULT)));   // "+" appends a working row; URL empty drops from the saved settings
+  renderBlockRows();
+}
+
+// Reads the rows exactly as they stand now: live DOM inputs when there are any, otherwise the working `uiLists` copy.
+function collectBlocklists() {
+  if (rowRefs.length === 0) return uiLists.map(cleanBlockRow).filter((r) => r.url);
+  const live = rowRefs.map((r) => ({ url: r.urlInp.value, enabled: r.cb.checked, banScenario: r.scenInp.value, refreshMinutes: r.refreshInp.value, unbanMinutes: r.unbanInp.value, capPerCycle: r.capInp.value }));
+  return live.map(cleanBlockRow).filter((r) => r.url);
+}
+
 // ── views ────────────────────────────────────────────────────────────
 for (const b of document.querySelectorAll('#sidebar button')) {
   b.addEventListener('click', () => {
@@ -309,11 +397,9 @@ function fillSettingsForm(s) {
   $('fNotify').checked = s.notificationsEnabled !== false;
   $('fWebhook').value = s.notifyWebhookUrl ?? '';
   $('fNotifyFmt').value = s.notifyFormat === 'json' ? 'json' : 'text';
-  $('fBlockEnabled').checked = !!s.blocklistEnabled;
-  $('fBlockUrl').value = s.blocklistUrl ?? '';
-  $('fBlockRefreshMin').value = s.blocklistRefreshMinutes ?? 60;
-  $('fBlockUnbanMin').value = s.blocklistUnbanMinutes ?? 1440;
-  $('fBlockCap').value = s.blocklistCapPerCycle ?? 200;
+  // Working rows for the dedicated Blocklists tab, painted from `/api/state` settings — canonical floors/URLs as saved.
+  uiLists = (s.blocklists ?? []).map(cleanBlockRow);
+  renderBlockRows();
   updateHints();
 }
 
@@ -327,11 +413,7 @@ function collectForm() {
     banReasonPrefix: $('fPrefix').value.trim(), banScenario: $('fScenario').value.trim(),
     autoBanEnabled: $('fAutoBan').checked, notificationsEnabled: $('fNotify').checked,
     notifyWebhookUrl: $('fWebhook').value.trim(), notifyFormat: $('fNotifyFmt').value === 'json' ? 'json' : 'text',
-    blocklistEnabled: $('fBlockEnabled').checked,
-    blocklistUrl: $('fBlockUrl').value.trim(),
-    blocklistRefreshMinutes: num('fBlockRefreshMin', settings.blocklistRefreshMinutes ?? 60),
-    blocklistUnbanMinutes: (() => { const v = Math.floor(Number($('fBlockUnbanMin').value)); return Number.isFinite(v) && v >= 0 ? v : (settings.blocklistUnbanMinutes ?? 1440); })(),
-    blocklistCapPerCycle: num('fBlockCap', settings.blocklistCapPerCycle ?? 200),
+    blocklists: collectBlocklists(),   // dedicated tab rows as collected (canonical floors; URL-empty rows drop server-side too)
     safeCountries: $('fSafe').value.split(',').map((c) => c.trim()).filter(Boolean),
     scoring: {
       recidivistBanThreshold: num('fRecT', settings.scoring.recidivistBanThreshold),
@@ -357,11 +439,24 @@ function updateHints() {
 }
 ['fGate', 'fScoreGate', 'fEvW', 'fScW', 'fBanW'].forEach((id) => $(id).addEventListener('input', updateHints));
 
+$('addBlockListBtn').addEventListener('click', () => { addBlockList(); $('blockMsg').textContent = '+ Add list: fill the URL, set schedule/grace/cap, then Save lists.'; });
+
+async function submitSettings(form) {
+  const r = await fetch('/api/settings', { method: 'POST', body: JSON.stringify(form) }).then((x) => x.json());
+  if (r.ok) { settings = form; uiLists = form.blocklists.map(cleanBlockRow); renderBlockRows(); }   // working rows reflect the saved canonical floors/URLs
+  return r;
+}
+
 $('saveBtn').addEventListener('click', async () => {
-  const r = await fetch('/api/settings', { method: 'POST', body: JSON.stringify(collectForm()) }).then((x) => x.json());
+  const r = await submitSettings(collectForm());
   $('settingsMsg').textContent = r.ok ? 'Settings applied.' : `Save failed: ${r.message}`;
   if (r.storeWarning) banner(r.storeWarning, 'warn');
-  settings = collectForm();
+});
+
+$('blockSaveBtn').addEventListener('click', async () => {
+  const r = await submitSettings(collectForm());
+  $('blockMsg').textContent = r.ok ? `Saved ${settings.blocklists.length} list row(s).` : `Save failed: ${r.message}`;
+  if (r.storeWarning) banner(r.storeWarning, 'warn');
 });
 
 $('testBtn').addEventListener('click', async () => {
@@ -385,7 +480,8 @@ const fmtTs = (iso) => {
 loadState();
 
 // Named exports for the offline UI tests (`tests/render.test.js`, `tests/grid.test.js`): they execute this exact file under a minimal DOM shim in
-// Node, so the render path a browser runs is verified without a browser — charts, stripped scenario labels, guard hints, and now grid sorting +
-// filter matching. `loadState` is exported too: a fresh page must paint from `/api/state` alone (no SSE frame, no "Refresh now" click).
+// Node, so the render path a browser runs is verified without a browser — charts, stripped scenario labels, guard hints, grid sorting + filter matching,
+// and now the dedicated Blocklists tab rows (+ Add list / collect). `loadState` is exported too: a fresh page must paint from `/api/state` alone (no SSE frame,
+// no "Refresh now" click) — including fillSettingsForm painting the working rows from `/api/state` settings.
 // The page itself loads app.js as an ES module and ignores these; zero dependencies stay.
-export { renderCycle, guard, loadState, searchCandidate, searchBanned };
+export { renderCycle, guard, loadState, searchCandidate, searchBanned, fillSettingsForm, collectBlocklists, addBlockList, renderBlockRows };

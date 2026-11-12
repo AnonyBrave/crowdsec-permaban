@@ -383,27 +383,30 @@ test('BlockBans_ScheduleAndOwnershipRoundTripThroughState', () => {
   const dir = tempDir();
   const s = EventStore.open(dir);
   assert.equal(s.blocklistSnapshot().tracked, 0);
-  assert.equal(s.blockSyncAt, null);
+  assert.equal(s.listSyncAt('https://example.test/listA'), null);
 
   s.recordAutoBan('5.1.1.1', null, '', 0, 'permaban: imported blocklist');   // list bans share the lifetime counter
-  s.recordBlockBan('5.1.1.1');
-  s.recordBlockBan('5.2.2.2');
-  assert.equal(s.markBlockRemoved('5.2.2.2'), true);      // first absence → the window opens with a real ISO stamp
-  assert.ok(s.blockEntry('5.2.2.2').removedAt);
-  s.recordBlockBan('5.2.2.2');                           // present again on the next fetch → the window closes
-  assert.equal(s.blockEntry('5.2.2.2').removedAt, null);
+  s.recordBlockBan('5.1.1.1', 'https://example.test/listA');                 // A owns it; B does not claim it yet
+  s.recordBlockBan('5.2.2.2', 'https://example.test/listA');
 
-  s.setBlockSync('https://example.test/listA', '2026-11-12T10:00:00.000Z');
+  assert.equal(s.removeBlockSource('5.1.1.1', 'https://example.test/listB'), false);   // B never claimed it: nothing to take back from B
+  assert.equal(s.removeBlockSource('5.1.1.1', 'https://example.test/listA'), true);     // the last refreshing URL lets go → GLOBAL absence, window stamped
+  s.recordBlockBan('5.1.1.1', 'https://example.test/listB');                  // B's refreshed listing claims it again: sources = [B], global window closed
+  assert.ok(!s.blockEntry('5.1.1.1').removedAt);                              // presence in one refreshing row closes the global window immediately
+  assert.equal(s.removeBlockSource('5.1.1.1', 'https://example.test/listA'), false);   // A no longer owns it, so B's claim keeps the entry protected
+  s.setListSync('https://example.test/listB', '2026-11-12T10:30:00.000Z');     // each URL keeps its own stamp in `state.json`
   assert.ok(s.persist());
 
   const again = EventStore.open(dir);
-  assert.equal(again.blockSyncUrl, 'https://example.test/listA');
-  assert.equal(again.blockSyncAt, '2026-11-12T10:00:00.000Z');
+  assert.equal(again.listSyncAt('https://example.test/listA'), null);          // only B was recorded as fetched
+  assert.equal(again.listSyncAt('https://example.test/listB'), '2026-11-12T10:30:00.000Z');
   assert.deepEqual([...again.blockBans.keys()].sort(), ['5.1.1.1', '5.2.2.2']);
-  assert.ok(again.isAutoBanned('5.1.1.1'));
+  assert.ok(again.isAutoBanned('5.1.1.1'));                                    // list bans share the "by app" flag & lifetime counter
   assert.equal(again.autoBansTotal(), 1);
+  assert.deepEqual([...again.blockEntry('5.1.1.1').sources], ['https://example.test/listB']);   // persisted sources survive the round trip
+  assert.ok(!again.blockEntry('5.2.2.2').removedAt);
 
-  // The unban is complete: list ownership drops AND the "by app" flag drops with it, so a later re-add bans anew.
+  // The unban is complete: every URL's ownership drops AND the "by app" flag drops with it, so a later re-add bans anew.
   again.completeBlockUnban('5.2.2.2');
   assert.equal(again.blockEntry('5.2.2.2'), undefined);
   assert.ok(!again.isAutoBanned('5.2.2.2'));
@@ -414,21 +417,21 @@ test('BlockBans_ScheduleAndOwnershipRoundTripThroughState', () => {
 test('BlockState_ReadOnlyLaunchFreezesRecordsAndSchedule', () => {
   const dir = tempDir();
   const first = EventStore.open(dir);
-  first.recordBlockBan('5.1.1.1');
-  first.setBlockSync('https://example.test/listA', '2026-11-12T10:00:00.000Z');
+  first.recordBlockBan('5.1.1.1', 'https://example.test/listA');
+  first.setListSync('https://example.test/listA', '2026-11-12T10:00:00.000Z');
   first.persist();
 
   const ro = EventStore.open(dir, { simulateBlockedWrites: true });
   assert.ok(ro.readOnly);
-  assert.equal(ro.blockSyncAt, '2026-11-12T10:00:00.000Z');          // reads what earlier launches recorded
-  ro.setBlockSync('https://example.test/listB', '2026-11-12T11:00:00.000Z');   // frozen: the stamp stays as it was
-  assert.equal(ro.blockSyncUrl, 'https://example.test/listA');
-  ro.recordBlockBan('9.9.9.9');                                      // no record on a read-only store
+  assert.equal(ro.listSyncAt('https://example.test/listA'), '2026-11-12T10:00:00.000Z');   // reads what earlier launches recorded
+  ro.setListSync('https://example.test/listB', '2026-11-12T11:00:00.000Z');                // frozen: the stamp stays as it was (list B absent)
+  assert.equal(ro.listSyncAt('https://example.test/listB'), null);
+  ro.recordBlockBan('9.9.9.9', 'https://example.test/listA');                              // no record on a read-only store
   assert.equal(ro.blockEntry('9.9.9.9'), undefined);
-  assert.equal(ro.markBlockRemoved('5.1.1.1'), false);
+  assert.equal(ro.removeBlockSource('5.1.1.1', 'https://example.test/listA'), false);
 
   const after = EventStore.open(dir);   // disk unchanged: the blocked launch never wrote
-  assert.equal(after.blockSyncUrl, 'https://example.test/listA');
+  assert.equal(after.listSyncAt('https://example.test/listA'), '2026-11-12T10:00:00.000Z');
   assert.deepEqual([...after.blockBans.keys()], ['5.1.1.1']);
 
   fs.rmSync(dir, { recursive: true, force: true });

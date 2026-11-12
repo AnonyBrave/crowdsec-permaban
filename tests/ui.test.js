@@ -31,7 +31,7 @@ test('Ui_EveryElementThePageTouchesExistsInTheHtml', () => {
 
   // Sidebar buttons → the view section they show (`data-view="x"` ↔ `#view-x`).
   const views = [...html.matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(views, ['dashboard', 'candidates', 'banned', 'activity', 'settings']);
+  assert.deepEqual(views, ['dashboard', 'candidates', 'banned', 'activity', 'blocklists', 'settings']);
   for (const v of views) {
     assert.ok(ids.has(`view-${v}`), `no #view-${v} section for the sidebar button`);
     assert.ok(appjs.includes('`view-${b.dataset.view}`'), 'the page does not switch sections by data-view');

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SettingsStore, resolveDataDirectory, scratchDataDirectory, seedFromEnv } from './core/settings.js';
+import { SettingsStore, resolveDataDirectory, scratchDataDirectory, seedFromEnv, normalizeBlocklists } from './core/settings.js';
 import { EventStore } from './core/store.js';
 import { CrowdSecSource, SourceAuthException, SourceException } from './core/source.js';
 import { Pipeline } from './core/pipeline.js';
@@ -282,18 +282,10 @@ function normalizeSettings(body) {
   if (typeof body.notificationsEnabled === 'boolean') s.notificationsEnabled = body.notificationsEnabled;
   if (Array.isArray(body.safeCountries)) s.safeCountries = body.safeCountries.map((c) => String(c).trim()).filter(Boolean);
 
-  // Imported blocklist settings. One URL string is not a security boundary here — the UI already edits baseUrl in the
-  // same way, and credentials never live in `settings.json`. Number fields are floors: unparsable keeps the previous.
-  if (typeof body.blocklistUrl === 'string') s.blocklistUrl = body.blocklistUrl.trim();
-  if (typeof body.blocklistEnabled === 'boolean') s.blocklistEnabled = body.blocklistEnabled;
-  for (const k of ['blocklistRefreshMinutes', 'blocklistCapPerCycle']) {
-    const v = Math.floor(Number(body[k]));
-    if (Number.isFinite(v)) s[k] = Math.max(1, v);
-  }
-  {
-    const v = Math.floor(Number(body.blocklistUnbanMinutes));   // 0 is meaningful: unban the cycle an IP leaves the list
-    if (Number.isFinite(v)) s.blocklistUnbanMinutes = Math.max(0, v);
-  }
+  // Imported lists: the UI sends `blocklists` as an array of rows (URL + schedule + grace window + cap). URL strings are not a
+  // security boundary here — baseUrl is edited in exactly the same way, and credentials never live in `settings.json`. Rows without
+  // a URL drop; number floors go through the shared canonical helper (`normalizeBlocklists`), same as every settings field.
+  if (Array.isArray(body.blocklists)) s.blocklists = normalizeBlocklists(body.blocklists);
 
   const sc = { ...s.scoring, ...(body.scoring ?? {}) };
   for (const k of ['recidivistBanThreshold', 'aggressiveEventThreshold', 'aggressiveScenarioThreshold'])

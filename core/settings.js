@@ -24,14 +24,19 @@ export const DEFAULT_SETTINGS = {
   notifyWebhookUrl: '',           // ntfy-style POST (topic URL) for auto-ban / candidate alerts
   notifyFormat: 'text',           // text = plain body + Title header; json = {"title","message"}
 
-  // Imported blocklist: the app permanent-bans every IP in a downloaded list, refreshes it on a schedule, and unbans an
-  // IP once it has left the list for `blocklistUnbanMinutes` (0 → same cycle). `blocklistCapPerCycle` keeps one cycle's
-  // API load bounded: a big list is applied over several cycles, not in one flood of POSTs against the Web UI.
-  blocklistEnabled: true,
-  blocklistUrl: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4',
-  blocklistRefreshMinutes: 60,     // minutes between list downloads; 60 = hourly
-  blocklistUnbanMinutes: 1440,    // grace window after an IP disappears from the list before its ban is removed
-  blocklistCapPerCycle: 200,       // max bans + unbans issued by the list per cycle (min 1)
+  // Imported lists: every enabled row permanent-bans its IPs with **its own** duration settings, `banScenario`, and prefix, is refreshed on its
+  // own `refreshMinutes` schedule, and drives unban for the IPs it issued. The removal window measures from the first successful refresh that found
+  // an IP missing from **every** enabled list ("union rule"); once open, the longest configured grace among the lists currently refreshing wins — so a
+  // conservative list never lets a fast one unban an IP it still owns. `capPerCycle` bounds each row's own cycle load (bans + unbans), so a big list lands
+  // over several cycles instead of flooding the Web UI at once. Default: borestad/blocklist-abuseipdb, 30-day s100 IPv4; ban scenario `blocklist/permaban`.
+  blocklists: [{
+    url: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4',
+    enabled: true,
+    banScenario: 'blocklist/permaban',   // scenario sent on this row's bans; editable per list in the dedicated tab
+    refreshMinutes: 60,      // minutes between list downloads for this URL; 60 = hourly
+    unbanMinutes: 1440,      // grace window after the IP is first seen missing from every refreshing list (min 0)
+    capPerCycle: 200,        // bans + unbans issued by THIS row in one cycle (min 1)
+  }],
 
   startMinimized: true,
   initialized: false,             // set after the first baseline sync (no notification storm on run 1)
@@ -46,6 +51,51 @@ export const DEFAULT_SETTINGS = {
     safeCountryBanScore: 2500,
   },
 };
+
+/// One canonical row: floors keep a saved value on unparsable numbers, and an empty/missing `banScenario` keeps the shipped default. Same rules as every other settings field.
+export function cleanBlockList(raw, fallback = null) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const fb = fallback ?? {};
+  const url = String(src.url ?? fb.url ?? '').trim();
+  const str = (key, def) => {
+    const v = String(src[key] ?? fb[key] ?? def).trim();
+    return v.length > 0 ? v : def;
+  };
+  const mins = (key, floor, def) => {
+    const v = Math.floor(Number(src[key] ?? fb[key]));
+    return Number.isFinite(v) && v >= floor ? v : def;
+  };
+  return {
+    url,
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : (typeof fb.enabled === 'boolean' ? fb.enabled : true),
+    banScenario: str('banScenario', 'blocklist/permaban'),   // editable scenario per list (default: blocklist/permaban)
+    refreshMinutes: mins('refreshMinutes', 1, 60),       // 60 = hourly default
+    unbanMinutes: mins('unbanMinutes', 0, 1440),         // 0 is meaningful: unban the cycle an IP leaves every list
+    capPerCycle: mins('capPerCycle', 1, 200),            // bans + unbans issued by THIS row in one cycle
+  };
+}
+
+/// A settings body (UI form / env seed target) → canonical rows. Rows without a URL are dropped; the order is preserved.
+export function normalizeBlocklists(body) {
+  const rows = Array.isArray(body) ? body : [];
+  return rows.map((r) => cleanBlockList(r)).filter((r) => r.url);
+}
+
+/// Settings.json written by older builds: a single list as scalar keys (`blocklistEnabled`/`blocklistUrl`/…). One row,
+/// same floors as the canonical schema. Returns null when no legacy URL is recorded — so defaults stay untouched.
+function legacyBlocklists(loaded) {
+  const url = typeof loaded.blocklistUrl === 'string' ? loaded.blocklistUrl.trim() : '';
+  if (!url) return null;
+  const v = (k, floor, def) => { const n = Math.floor(Number(loaded[k])); return Number.isFinite(n) && n >= floor ? n : def; };
+  return [{
+    url,
+    enabled: loaded.blocklistEnabled !== false,
+    banScenario: 'blocklist/permaban',   // the old scalar schema had no per-list scenario; migration uses the shipped default
+    refreshMinutes: v('blocklistRefreshMinutes', 1, 60),
+    unbanMinutes: v('blocklistUnbanMinutes', 0, 1440),
+    capPerCycle: v('blocklistCapPerCycle', 1, 200),
+  }];
+}
 
 function appDataBase() {
   if (process.platform === 'win32') return process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
@@ -93,22 +143,28 @@ export function seedFromEnv(settings, env = process.env, { firstRun = true, seed
       if (Number.isFinite(poll)) { settings.pollIntervalSeconds = poll; applied.push('pollIntervalSeconds'); }
     }
 
-    // Blocklist seeds: the compose file can pick a list, its schedule, and the unban delay on the first run.
-    setStr('blocklistUrl', (env.PERMABAN_BLOCKLIST_URL ?? '').trim());
-    const en = (env.PERMABAN_BLOCKLIST_ENABLED ?? '').trim().toLowerCase();
-    if (en === '1' || en === 'true' || en === 'yes') { settings.blocklistEnabled = true; applied.push('blocklistEnabled'); }
-    else if (en === '0' || en === 'false' || en === 'no') { settings.blocklistEnabled = false; applied.push('blocklistEnabled'); }
-    const mins = (key, envName) => {
-      const v = Math.max(1, Math.floor(Number((env[envName] ?? '').trim())));
-      if ((env[envName] ?? '').trim() && Number.isFinite(v)) { settings[key] = v; applied.push(key); }
-    };
-    mins('blocklistRefreshMinutes', 'PERMABAN_BLOCKLIST_REFRESH_MINUTES');
-    const unban = (env.PERMABAN_BLOCKLIST_UNBAN_MINUTES ?? '').trim();   // 0 is a valid value: unban the cycle an IP leaves
-    if (unban) {
-      const m = Math.floor(Number(unban));
-      if (Number.isFinite(m) && m >= 0) { settings.blocklistUnbanMinutes = m; applied.push('blocklistUnbanMinutes'); }
+    // Blocklist seeds map onto the **first** row of the lists array — the compose file picks a URL, its enabled switch,
+    // schedule, grace window and cap. Saved rows always win: these env vars seed the first run only.
+    if (!Array.isArray(settings.blocklists) || settings.blocklists.length === 0) {
+      settings.blocklists = [{ url: '', enabled: true, banScenario: 'blocklist/permaban', refreshMinutes: 60, unbanMinutes: 1440, capPerCycle: 200 }];
     }
-    mins('blocklistCapPerCycle', 'PERMABAN_BLOCKLIST_CAP_PER_CYCLE');
+    const row = settings.blocklists[0];
+    const seedRow = (envName, key, floor) => {
+      const raw = (env[envName] ?? '').trim();   // empty env leaves the first row alone, exactly like every other seed
+      if (!raw && key !== 'enabled') return;
+      let v;
+      if (key === 'url' || key === 'banScenario') { v = String(raw).trim(); }
+      else if (key === 'enabled') { v = raw.toLowerCase() === '1' || raw.toLowerCase() === 'true' || raw.toLowerCase() === 'yes'; }
+      else { const n = Math.floor(Number(raw)); if (!Number.isFinite(n) || n < floor) return; v = Math.max(floor, n); }
+      row[key] = v; applied.push(`blocklists[0].${key}`);
+    };
+    seedRow('PERMABAN_BLOCKLIST_URL', 'url', 0);
+    seedRow('PERMABAN_BLOCKLIST_SCENARIO', 'banScenario', 0);   // first-run scenario for this row (default blocklist/permaban when env is empty)
+    const enRaw = (env.PERMABAN_BLOCKLIST_ENABLED ?? '').trim().toLowerCase();
+    if (enRaw) { row.enabled = enRaw === '1' || enRaw === 'true' || enRaw === 'yes'; applied.push('blocklists[0].enabled'); }
+    seedRow('PERMABAN_BLOCKLIST_REFRESH_MINUTES', 'refreshMinutes', 1);
+    seedRow('PERMABAN_BLOCKLIST_UNBAN_MINUTES', 'unbanMinutes', 0);   // 0 is a valid value: unban the cycle an IP leaves every list
+    seedRow('PERMABAN_BLOCKLIST_CAP_PER_CYCLE', 'capPerCycle', 1);
   }
 
   return applied;
@@ -123,6 +179,8 @@ function mergeDefaults(loaded) {
     if (k === 'scoring') s.scoring = { ...s.scoring, ...loaded.scoring };
     else s[k] = loaded[k];
   }
+  if (Array.isArray(loaded.blocklists)) s.blocklists = normalizeBlocklists(loaded.blocklists);   // canonical rows, floors applied on reload too
+  else { const legacy = legacyBlocklists(loaded); if (legacy) s.blocklists = legacy; }           // settings.json from an older single-list build
   return s;
 }
 
