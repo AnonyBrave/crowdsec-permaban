@@ -239,10 +239,18 @@ ip/country/scenario/origin and answered empty for events/bans/score/created/expi
 
 ## Docker app
 
+GitHub builds the image for you. `.github/workflows/docker.yml` runs on every push to `main` and from
+**Actions → Build and publish the image → Run workflow**: it checks out the repo, runs the test suite (a red suite never
+publishes), builds with buildx + Actions layer cache, and pushes `:latest` plus a `sha-<short>` tag to your ghcr package
+with the **workflow token** (`GITHUB_TOKEN`, `packages: write`) — no Personal Access Token involved. Replace the workflow's
+`IMAGE:` line when publishing a fork.
+
+Building by hand is still available on any machine with a Docker CLI (replace `youruser` with your registry account in
+README, compose.yaml and package.json scripts):
+
 ```powershell
-# Replace `youruser` with your own registry account (README, compose.yaml, package.json scripts).
 docker build -t ghcr.io/youruser/crowdsec-permaban:latest .   # node:20-alpine, no npm install step
-docker push ghcr.io/youruser/crowdsec-permaban:latest         # your registry (Docker Hub works too)
+docker push ghcr.io/youruser/crowdsec-permaban:latest         # needs a PAT with write:packages (Docker Hub works too)
 ```
 
 The image bakes in the container defaults: unprivileged user `crowdsec-permaban` at fixed uid/gid **568** — the app-user
@@ -257,26 +265,27 @@ work. A **bind-mounted folder** does not inherit it — `chown -R 568:568 <folde
 already grants 568 (the usual case for shared app folders), there is nothing to do at all. If you forget, the app still
 runs: the store opens the history read-only, the banner names the mode and `/healthz` stays green, nothing is recorded.
 
-Deploy: build + push from any machine with a Docker CLI, set `image:` in `compose.yaml`, pick the volume (named volume =
-nothing to do; bind mount = chown for 568 once), fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`, `PERMABAN_PASSWORD`
-(+ `PERMABAN_WEBHOOK_URL` for ntfy pushes) — as env they seed settings on the first run only, and a Save in Settings
-writes them encrypted into the volume (`credentials.enc` + `key.bin`). Keep values out of any compose file you share or
-commit (`.env` with `${VAR}` references). Open `http://<host>:8780`: one instance per port — a second bind on 8780 fails,
-by design.
+Deploy: merge into `main` (or run the workflow), pull `:latest` on the host, set `image:` in `compose.yaml`, pick the volume
+(named volume = nothing to do; bind mount = chown for 568 once), fill in `PERMABAN_BASE_URL`, `PERMABAN_USERNAME`,
+`PERMABAN_PASSWORD` (+ `PERMABAN_WEBHOOK_URL` for ntfy pushes) — as env they seed settings on the first run only, and a Save
+in Settings writes them encrypted into the volume (`credentials.enc` + `key.bin`). Keep values out of any compose file you
+share or commit (`.env` with `${VAR}` references). Open `http://<host>:8780`: one instance per port — a second bind on 8780
+fails, by design. A redeploy picks up the new image: `docker compose pull && docker compose up -d` (or pull + redeploy in
+the compose UI), and `docker ps` shows `healthy` once `/healthz` answers.
 
 ### Keeping the image private
 
-1. **GitHub Container Registry** — images are **private by default**. Create a Personal Access Token with
-   `read:packages` + `write:packages`, log in and push:
+1. **GitHub Container Registry** — images are **private by default**, and a package the workflow publishes is tied to this
+   repository, so publishing needs no token at all: `GITHUB_TOKEN` with `packages: write` does it. Pulling is where your
+   Personal Access Token comes in — every machine that pulls runs `docker login ghcr.io -u youruser` once with a token
+   limited to `read:packages`:
    ```powershell
-   docker login ghcr.io -u youruser                        # paste the PAT (username = your GitHub login)
-   docker build -t ghcr.io/youruser/crowdsec-permaban:latest .
-   docker push ghcr.io/youruser/crowdsec-permaban:latest
+   docker login ghcr.io -u youruser                        # paste the read:packages PAT (username = your GitHub login)
+   docker pull ghcr.io/youruser/crowdsec-permaban:latest   # the deploy host does this before compose up
    ```
-   Set `compose.yaml` to that image name and **keep it lowercase** (ghcr lowercases the repo). Every machine that pulls
-   runs `docker login ghcr.io -u youruser` once — the token lives in the engine's own config (`/root/.docker/config.json`),
-   never in the compose file. No pull-rate limit like Docker Hub's, and a personal package is pulled only by tokens for
-   that account (an organization package can have collaborators).
+   Set `compose.yaml` to that image name and **keep it lowercase** (ghcr lowercases the repo). The token lives in the
+   engine's own config (`/root/.docker/config.json`), never in the compose file. No pull-rate limit like Docker Hub's, and
+   a personal package is pulled only by tokens for that account (an organization package can have collaborators).
 2. **Docker Hub, repo set to Private** — same commands as above, then flip
    **Settings → Change Repository Visibility → Private** on the `crowdsec-permaban` repository. The Personal plan includes
    **1 private repository**; authenticated pulls are limited to 200 per 6 hours (plenty for one host pulling `latest`
@@ -294,16 +303,17 @@ and `/healthz` stays green (see *Data & configuration*). `package.json` at the r
 ## Publishing & running your own instance
 
 Layout: everything lives at the repository root — `server.js`, `core/`, `public/`, `tests/`, `Dockerfile`,
-`compose.yaml`, `package.json`, `.dockerignore`, plus this `README.md`, `LICENSE`, `.gitignore`, `.gitattributes`.
-The Docker build context is the root, and `.dockerignore` keeps `tests/`, markdown, `Dockerfile` and `compose.yaml`
-out of the image. Nothing personal ships in the code — no credentials, no real Web UI hostname, no webhook topic. The one
-exception is `compose.yaml`'s `image:` line, which points at your private ghcr package by design (replace it before
-publishing a fork):
+`compose.yaml`, `package.json`, `.dockerignore`, plus this `README.md`, `LICENSE`, `.gitignore`, `.gitattributes`, and the
+publishing workflow under `.github/workflows/`. The Docker build context is the root, and `.dockerignore` keeps `tests/`,
+markdown, `Dockerfile` and `compose.yaml` out of the image. Nothing personal ships in the code — no credentials, no real Web
+UI hostname, no webhook topic, no registry token. The two exceptions are the image name, by design: `compose.yaml`'s `image:`
+line and the workflow's `IMAGE:` line both point at your private ghcr package (replace them before publishing a fork):
 
 - `DEFAULT_SETTINGS.baseUrl` is the placeholder `https://crowdsecwebui.example.com`; set your own URL in Settings or
   seed it on the first run with `PERMABAN_BASE_URL`. Same for the compose file's env values.
-- `youruser` in `package.json` scripts and the examples above is yours to replace with your registry account; ghcr image
-  names must stay lowercase.
+- `youruser` in `package.json` scripts and the examples above is a placeholder, yours to replace with your registry
+  account; ghcr image names must stay lowercase. The `compose.yaml`/workflow image lines carry the owner's real lowercase
+  name as committed.
 - `.gitignore` keeps runtime data out of git: `settings.json`, `credentials.enc`, `key.bin`, `events.ndjson`,
   `state.json`, the scratch folder, transferred image tarballs and temp test output. The tests write their fixtures to
   OS temp dirs (`os.tmpdir()` + a `perma-…-` prefix), never inside the repo.
@@ -315,8 +325,9 @@ Publishing hygiene:
   A compose file you share publicly must keep `PERMABAN_USERNAME` / `PERMABAN_PASSWORD` empty.
 - An ntfy topic URL **is** a secret — anyone who knows it can post to it. Keep `notifyWebhookUrl` in Settings only,
   never in a committed `compose.yaml`.
-- Registry tokens are write-scoped and minimal: GitHub PAT with `read:packages` + `write:packages` for GHCR, a Docker
-  Hub **Access Token** (Account Settings → Security) instead of the account password. Set the repository private if
+- Publishing through the workflow needs no registry token (the job uses `GITHUB_TOKEN` with `packages: write`). A manual
+  push needs a GitHub PAT scoped to `read:packages` + `write:packages`, and each deploy host pulls with a `read:packages`
+  PAT; on Docker Hub use an **Access Token** (Account Settings → Security) instead of the account password. Set the repository private if
   you want it invisible (`ghcr.io/youruser/crowdsec-permaban` is private by default; on Docker Hub flip
   **Settings → Change Repository Visibility → Private**), and keep your Web UI hostname out of README, compose file
   and commit messages before publishing.

@@ -1,4 +1,7 @@
 # Docker Compose stack — `docker compose up -d` on any host, or paste it into a compose UI (Dockge, Portainer).
+# The image comes from GitHub Actions pushing to ghcr. A private package is pulled by the engine, not by compose: run
+# `docker login ghcr.io -u youruser` once on the machine that pulls (token stored in the daemon's config.json), so no
+# registry secret belongs in this file. Replace the image name with your own lowercase package before deploying a fork.
 services:
   crowdsec-permaban:
     image: ghcr.io/anonybrave/crowdsec-permaban:latest
