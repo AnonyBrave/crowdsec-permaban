@@ -28,7 +28,9 @@ const STATE = { settings: { baseUrl: 'https://crowdsecwebui.example.com', userna
   historyRetentionDays: 90, permanentDuration: '876000h', banReasonPrefix: 'permaban', banScenario: 'manual/web-ui',
   autoBanEnabled: true, notificationsEnabled: true, notifyWebhookUrl: '', notifyFormat: 'text', safeCountries: ['FR'],
   scoring: { recidivistBanThreshold: 3, aggressiveEventThreshold: 1000, aggressiveScenarioThreshold: 2, eventWeight: 1,
-    scenarioWeight: 100, banWeight: 500, safeCountryBanEnabled: true, safeCountryBanScore: 2500 } },
+    scenarioWeight: 100, banWeight: 500, safeCountryBanEnabled: true, safeCountryBanScore: 2500 },
+  blocklistEnabled: false, blocklistUrl: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4',
+  blocklistRefreshMinutes: 60, blocklistUnbanMinutes: 1440, blocklistCapPerCycle: 200 },
   dataDir: 'X', mode: 'read-write', activity: [], storeWarning: null, cycle: null };
 
 function makeShim() {
@@ -83,7 +85,10 @@ const BANNED = [
   { id: 13, ip: '198.51.100.7', scenario: 'manual/web-ui', country: 'US', origin: 'cscli', createdAt: '2026-11-04T08:00:00.000Z', expiresAt: '2126-11-03T08:00:00.000Z', autoBannedByApp: false, events: 40, bans: 2, score: 1240 },
 ];
 
-const snapshot = () => ({ at: '2026-11-06T15:00:00.000Z', totalEvents: 3800, autoBansIssued: 1, connected: true,
+const snapshot = () => ({ at: '2026-11-06T15:00:00.000Z', totalEvents: 3800, autoBansIssued: 1, autoBansTotal: 4, connected: true,
+  // A cycle where the imported list added two bans and unbanned one: the page's card fields come from these numbers.
+  blocklistEnabled: true, blocklistUrl: 'https://example.test/abuseipdb-s100-30d.ipv4', blocklistAdded: 2, blocklistUnbanned: 1,
+  blocklistTracked: 7, blocklistSkip: null,
   candidates: CAND.slice(), banned: BANNED.slice(),
   dashboard: { bannedIps: 3, recidivistBannedIps: 2, dailyEvents: [], topScenarios: [], topCountries: [] } });
 
@@ -315,4 +320,29 @@ test('Grid_FilterAndSortCombine', () => {
   const kept2 = CAND.filter((r) => rowText('candidatesGrid', r).includes('8.8.8.8'));
   assert.equal(JSON.stringify(shown('candidatesGrid')), JSON.stringify(expectOrder(kept2, 'firstSeen', sortState.candidatesGrid.dir)),
     'Candidates: a text column sorts the filtered rows low-first');
+});
+
+// The dashboard cards and the Settings form fill from what the server sends — not from this cycle's activity counters.
+// A page opened between two polls sees the persisted lifetime count, the tracked list number, and the saved blocklist
+// settings; reloads never blank them out.
+test('Grid_CardsAndSettingsFormFollowTheStateSnapshot', () => {
+  app.renderCycle(snapshot());
+
+  // The shim stores what app.js assigns, so compare as text — a real `textContent` always holds a string.
+  assert.equal(String(els.statTotal.textContent), n0(3800));    // grouped as the page displays every event count
+  assert.equal(String(els.statIssuedTotal.textContent), '4');   // lifetime counter, not this cycle's number
+  assert.equal(String(els.statIssued.textContent), '1');
+  assert.equal(String(els.statBlockTotal.textContent), '7');    // what the imported list owns right now
+  assert.equal(String(els.statBlockAdded.textContent), '2');
+  assert.equal(String(els.statBlockUnbanned.textContent), '1');
+
+  // Module init ran loadState() against the stubbed /api/state: every blocklist field lands in its input.
+  assert.equal(els.fBlockEnabled.checked, false);
+  assert.equal(els.fBlockUrl.value, 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4');
+  assert.equal(els.fBlockRefreshMin.value, 60);           // one field in minutes: 60 = hourly
+  assert.equal(els.fBlockUnbanMin.value, 1440);
+  assert.equal(els.fBlockCap.value, 200);
+
+  app.renderCycle({ ...snapshot(), autoBansTotal: undefined });   // an older snapshot with no total falls back to this cycle
+  assert.equal(String(els.statIssuedTotal.textContent), '1');
 });

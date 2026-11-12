@@ -14,6 +14,7 @@ const settings = (over = {}) => ({
   baseUrl: 'http://mock', username: 'u', password: 'p', pollIntervalSeconds: 60, webUiLookbackHours: 168,
   safeCountries: ['FR'], autoBanEnabled: true, permanentDuration: '876000h', banScenario: 'manual/web-ui',
   banReasonPrefix: 'permaban', historyRetentionDays: 90, notificationsEnabled: true, initialized: false,
+  blocklistEnabled: false, blocklistUrl: '', blocklistRefreshMinutes: 60, blocklistUnbanMinutes: 1440, blocklistCapPerCycle: 200,
   scoring: { recidivistBanThreshold: 3, aggressiveEventThreshold: 1000, aggressiveScenarioThreshold: 2,
     eventWeight: 1, scenarioWeight: 100, banWeight: 500, safeCountryBanEnabled: true, safeCountryBanScore: 2500 },
   ...over,
@@ -35,13 +36,14 @@ function mockSource(events) {
   };
 }
 
-function harness(initialEvents, over = {}) {
+// `fetcher` is the imported-list seam (async url → list text); when it throws, the pipeline logs and keeps its state.
+function harness(initialEvents, over = {}, fetcher = async () => '') {
   const dir = tempDir();
   const store = EventStore.open(dir);
   const s = settings(over);
   const logs = [], notices = [];
   const source = mockSource(initialEvents);
-  const p = new Pipeline({ getSettings: () => s, store, source, log: (l) => logs.push(l) });
+  const p = new Pipeline({ getSettings: () => s, store, source, log: (l) => logs.push(l), blockFetcher: fetcher });
   p.notifier = (title, body) => notices.push(`${title}: ${body}`);
   return { dir, store, settings: s, pipeline: p, source, logs, notices };
 }
@@ -64,6 +66,10 @@ test('FirstRun_BaselineNoNotify_AndAutoBansForeignRecidivist', async () => {
   assert.deepEqual(h.source.calls[0], { ip: '1.2.3.4', duration: '876000h',
     reason: 'permaban: recidivist (3 bans)', scenario: 'manual/web-ui' });
   assert.ok(h.store.isAutoBanned('1.2.3.4'));
+  // The card reads the lifetime counter, not this cycle's number: a page opened after idle cycles shows what has been
+  // issued all along (`state.json`), so an indicator can never read 0 on reload.
+  assert.equal(r.autoBansIssued, 1);
+  assert.equal(r.autoBansTotal, 1);
   assert.equal(r.candidates[0].action, 'auto-ban');
 
   // First run records the baseline silently (no notification storm).
@@ -98,6 +104,14 @@ test('SecondRun_NoDoubleBan_AndBannedIpLeavesTheCandidateList', async () => {
   const r4 = await h.pipeline.runCycle();                            // state cleared → permanent ban issued again
   assert.equal(r4.autoBansIssued, 1);
   assert.equal(h.source.calls.length, 2);
+
+  // The lifetime count is the number the card shows: idle cycles keep it steady, a re-issued ban counts as a fresh
+  // issuance, and reopening the store (the next launch) reads exactly the same value from `state.json`.
+  assert.equal(r2.autoBansTotal, 1);
+  assert.equal(r3.autoBansTotal, 1);
+  assert.equal(r4.autoBansTotal, 2);
+  const reopened = EventStore.open(h.dir);
+  assert.equal(reopened.autoBansTotal(), 2);
 
   fs.rmSync(h.dir, { recursive: true, force: true });
 });
@@ -173,6 +187,37 @@ test('MasterSwitchOff_NoBanIsIssuedEvenAboveTheGate', async () => {
   fs.rmSync(h.dir, { recursive: true, force: true });
 });
 
+// ── imported blocklist: ban on arrival, ownership, schedule, removal window, unban by the live decision id ───────
+const listSettings = (over = {}) => settings({
+  blocklistEnabled: true, blocklistUrl: 'https://example.test/list', blocklistRefreshMinutes: 60,
+  blocklistUnbanMinutes: 1440, blocklistCapPerCycle: 200, ...over,
+});
+
+test('BlocklistFirstRun_BansEveryListedIp_AndCountsTheLifetimeTotal', async () => {
+  const fetchCalls = [];
+  const h = harness([], listSettings(), async (url) => {
+    fetchCalls.push(url);
+    return `# header comment\n198.51.100.4   # CN AS1234 owner\n5.6.7.8\nbogus line\n172.20.1.5   # private → dropped`;
+  });
+
+  const r = await h.pipeline.runCycle();
+
+  // Every public IP in the list gets a permanent ban with the app's duration/prefix/scenario; the comment tail, header
+  // lines, and the private address are ignored. Bans share the lifetime counter with rule auto-bans: total 2.
+  assert.equal(r.blocklistAdded, 2);
+  assert.equal(r.blocklistTracked, 2);
+  assert.deepEqual(h.source.calls.map((c) => c.ip), ['198.51.100.4', '5.6.7.8']);
+  assert.equal(r.autoBansIssued, 2);
+  assert.equal(r.autoBansTotal, 2);
+  assert.match(h.source.calls[0].reason, /^permaban: imported blocklist$/);
+
+  // The first cycle is baseline: bans are logged and counted, notifications stay quiet (same rule as every candidate).
+  assert.ok(h.logs.some((l) => l.includes('BLOCKLIST-BANNED 198.51.100.4')));
+  assert.equal(fetchCalls.length, 1);
+
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
 test('ReadOnlyCycle_ScoresTheFrozenHistory_AndRecordsNothing', async () => {
   const h = harness(seeds());
 
@@ -190,6 +235,78 @@ test('ReadOnlyCycle_ScoresTheFrozenHistory_AndRecordsNothing', async () => {
   assert.ok(c && c.autoBannedByApp);                  // the app-ban state loaded from disk blocks a second POST
   assert.equal(r2.autoBansIssued, 0);
   assert.equal(h.source.calls.length, 1);             // cycle 1 issued exactly one ban
+
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
+test('BlocklistSchedule_RefreshesOnlyWhenDue_AndUnbansAfterTheConfiguredWindow', async () => {
+  const fetchCalls = [];
+  const L1 = '# list A\n198.51.100.4\n5.6.7.8';
+  const h = harness([], listSettings(), async (url) => { fetchCalls.push(url); return url.endsWith('B') ? '198.51.100.4' : L1; });
+
+  await h.pipeline.runCycle();                                     // cycle 1: both IPs banned, schedule stamped
+  assert.equal(fetchCalls.length, 1);
+
+  // The live Web UI now lists the two decisions — this is what an unban-by-id lookup reads.
+  h.source.setEvents([
+    banDecision(100, '198.51.100.4', new Date().toISOString()),
+    banDecision(101, '5.6.7.8', new Date().toISOString()),
+  ]);
+
+  const r2 = await h.pipeline.runCycle();                          // same URL, window not elapsed → no download
+  assert.equal(r2.blocklistSkip, 'not due');
+  assert.equal(r2.blocklistAdded, 0);
+  assert.equal(r2.blocklistUnbanned, 0);
+  assert.equal(fetchCalls.length, 1);
+
+  // Point the settings at list B (5.6.7.8 is gone) and open the unban window to 0 minutes: a URL change refetches on
+  // its next cycle whatever the old schedule says, and absence #1 is unbanned in that same cycle.
+  h.settings.blocklistUrl = 'https://example.test/listB';
+  h.settings.blocklistUnbanMinutes = 0;
+  const r3 = await h.pipeline.runCycle();
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(r3.blocklistAdded, 0);                             // 198.51.100.4 is already banned and tracked → nothing to do
+  assert.equal(r3.blocklistUnbanned, 1);                          // window is 0 minutes: immediate unban
+  assert.ok(h.source.calls.some((c) => c.unban === 101));          // deleted by the decision id live in the store
+  assert.equal(h.store.blockEntry('5.6.7.8'), undefined);         // list ownership dropped
+  assert.ok(!h.store.isAutoBanned('5.6.7.8'));                    // the app-ban flag drops with it
+  assert.equal(r3.blocklistTracked, 1);
+
+  const r4 = await h.pipeline.runCycle();                          // same URL B again → schedule-gated: no third fetch
+  assert.equal(r4.blocklistSkip, 'not due');
+  assert.equal(fetchCalls.length, 2);
+  assert.ok(h.logs.some((l) => l.includes('BLOCKLIST-UNBANNED 5.6.7.8')));
+
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
+// The cap keeps one cycle's API load bounded on a big list; the remainder lands on the next fetch (a URL change is
+// the deterministic "next fetch" trigger for this test).
+test('BlocklistCap_AppliesTheListOverSeveralCycles', async () => {
+  const h = harness([], listSettings({ blocklistCapPerCycle: 2, blocklistUnbanMinutes: 0 }),
+    async (url) => url.endsWith('B') ? '1.1.1.1\n2.2.2.2\n3.3.3.3\n4.4.4.4' : '1.1.1.1\n2.2.2.2\n3.3.3.3\n4.4.4.4');
+
+  const r = await h.pipeline.runCycle();
+  assert.equal(r.blocklistAdded, 2);                              // exactly the cap: first two in list order
+  assert.deepEqual(h.source.calls.map((c) => c.ip), ['1.1.1.1', '2.2.2.2']);
+
+  h.settings.blocklistUrl = 'https://example.test/listB';         // immediate refetch of the same content
+  const r2 = await h.pipeline.runCycle();
+  assert.equal(r2.blocklistAdded, 2);                             // the rest of the list on this cycle
+  assert.deepEqual(h.source.calls.map((c) => c.ip), ['1.1.1.1', '2.2.2.2', '3.3.3.3', '4.4.4.4']);
+
+  fs.rmSync(h.dir, { recursive: true, force: true });
+});
+
+// A decision the list did not issue is never adopted: leaving the list must not unban someone else's ban.
+test('Blocklist_DoesNotAdoptForeignActiveDecisions', async () => {
+  const h = harness([banDecision(200, '7.7.7.7', new Date().toISOString())],   // active ban created by the Web UI
+    listSettings(), async () => '# only a foreign ban\n7.7.7.7');
+
+  const r = await h.pipeline.runCycle();
+  assert.equal(r.blocklistAdded, 0);
+  assert.equal(h.store.blockEntry('7.7.7.7'), undefined);          // not tracked → its removal can never unban id 200
+  assert.equal(h.source.calls.length, 0);
 
   fs.rmSync(h.dir, { recursive: true, force: true });
 });

@@ -71,7 +71,10 @@ const waitFor = async (fn, ms, msg) => {
 
 async function startServer(dataDir, extraEnv = {}) {
   const child = spawn(process.execPath, [SERVER_JS], {
-    env: { ...process.env, PERMABAN_DATA_DIR: dataDir, PERMABAN_PORT: '0', PERMABAN_START_PAUSED: '1', ...extraEnv },
+    env: { ...process.env, PERMABAN_DATA_DIR: dataDir, PERMABAN_PORT: '0', PERMABAN_START_PAUSED: '1',
+      // No network in these tests (localhost mock only): the imported list stays off, exactly as a compose deployment
+      // can keep it off. The pipeline's own blocklist flows are tested offline through its fetcher seam.
+      PERMABAN_BLOCKLIST_ENABLED: '0', ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   });
   let out = ''; child.stdout.setEncoding('utf8'); child.stdout.on('data', (c) => { out += c; });

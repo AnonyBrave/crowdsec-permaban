@@ -188,6 +188,45 @@ test('StateRoundTrips_AutoBansAndNotifiedIpsSurviveAReload', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// The dashboard card's number is this lifetime counter, persisted in `state.json` — that is what keeps a page opened after
+// idle cycles from showing 0. Re-recording one IP (its decision id refreshed on the Web UI) must not double-count an issuance.
+test('BansIssuedTotal_CountsIssuancesAndSurvivesAReload', () => {
+  const dir = tempDir();
+  const s = EventStore.open(dir);
+  assert.equal(s.autoBansTotal(), 0);
+
+  s.recordAutoBan('3.3.3.3', 1, 'US', 1500, 'recidivist (3 bans)');    // pipeline auto-ban → +1
+  s.recordAutoBan('4.4.4.4', null, 'DE', 900, 'foreign first ban');     // the UI Ban button path (no decision id yet)
+  s.recordAutoBan('3.3.3.3', 2, 'US', 1500, 'decision id refreshed');   // same IP tracked → not a new issuance
+  assert.equal(s.autoBansTotal(), 2);
+
+  s.removeAutoBan('4.4.4.4');                                          // unbanned externally: the ban stays counted
+  assert.equal(s.autoBansTotal(), 2);
+  s.persist();
+
+  const again = EventStore.open(dir);
+  assert.equal(again.autoBansTotal(), 2);                             // restored from state.json
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('BansIssuedTotal_ReadOnlyLaunchKeepsItInMemory', () => {
+  const dir = tempDir();
+  const first = EventStore.open(dir);
+  first.recordAutoBan('3.3.3.3', 1, 'US', 1500, 'recidivist');        // launch 1 writes the record
+  first.persist();
+
+  const ro = EventStore.open(dir, { simulateBlockedWrites: true });    // same folder, writes blocked this time
+  assert.equal(ro.autoBansTotal(), 1);                                // reads the persisted count like everything else
+  ro.recordAutoBan('5.5.5.5', null, 'NL', 400, 'ui ban');            // a read-only launch records nothing: no record,
+  assert.equal(ro.autoBansTotal(), 1);                               // so the counter shown this launch stays as it was on disk
+  ro.persist();                                                       // writes nothing, as for any read-only launch
+
+  const after = EventStore.open(dir);
+  assert.equal(after.autoBansTotal(), 1);                             // the blocked launch did not move the counter
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('Compaction_RewritesTheLogAndKeepsEverythingReadable', () => {
   const dir = tempDir();
   const s = EventStore.open(dir);
@@ -334,6 +373,63 @@ test('MarkInvisibleDecisionsExpired_LeavesTheAlertSharingThatIdAlone', () => {
 
   const again = EventStore.open(dir);   // the persisted override applies to decisions only
   assert.equal(again.allEvents().find((e) => e.kind === 'alert' && e.id === 9).expired, false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The imported list keeps its own small overlay in `state.json`: what it owns, when an IP was first seen missing, and
+// the URL + timestamp of the last real download — the schedule survives a restart exactly like every other state.
+test('BlockBans_ScheduleAndOwnershipRoundTripThroughState', () => {
+  const dir = tempDir();
+  const s = EventStore.open(dir);
+  assert.equal(s.blocklistSnapshot().tracked, 0);
+  assert.equal(s.blockSyncAt, null);
+
+  s.recordAutoBan('5.1.1.1', null, '', 0, 'permaban: imported blocklist');   // list bans share the lifetime counter
+  s.recordBlockBan('5.1.1.1');
+  s.recordBlockBan('5.2.2.2');
+  assert.equal(s.markBlockRemoved('5.2.2.2'), true);      // first absence → the window opens with a real ISO stamp
+  assert.ok(s.blockEntry('5.2.2.2').removedAt);
+  s.recordBlockBan('5.2.2.2');                           // present again on the next fetch → the window closes
+  assert.equal(s.blockEntry('5.2.2.2').removedAt, null);
+
+  s.setBlockSync('https://example.test/listA', '2026-11-12T10:00:00.000Z');
+  assert.ok(s.persist());
+
+  const again = EventStore.open(dir);
+  assert.equal(again.blockSyncUrl, 'https://example.test/listA');
+  assert.equal(again.blockSyncAt, '2026-11-12T10:00:00.000Z');
+  assert.deepEqual([...again.blockBans.keys()].sort(), ['5.1.1.1', '5.2.2.2']);
+  assert.ok(again.isAutoBanned('5.1.1.1'));
+  assert.equal(again.autoBansTotal(), 1);
+
+  // The unban is complete: list ownership drops AND the "by app" flag drops with it, so a later re-add bans anew.
+  again.completeBlockUnban('5.2.2.2');
+  assert.equal(again.blockEntry('5.2.2.2'), undefined);
+  assert.ok(!again.isAutoBanned('5.2.2.2'));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('BlockState_ReadOnlyLaunchFreezesRecordsAndSchedule', () => {
+  const dir = tempDir();
+  const first = EventStore.open(dir);
+  first.recordBlockBan('5.1.1.1');
+  first.setBlockSync('https://example.test/listA', '2026-11-12T10:00:00.000Z');
+  first.persist();
+
+  const ro = EventStore.open(dir, { simulateBlockedWrites: true });
+  assert.ok(ro.readOnly);
+  assert.equal(ro.blockSyncAt, '2026-11-12T10:00:00.000Z');          // reads what earlier launches recorded
+  ro.setBlockSync('https://example.test/listB', '2026-11-12T11:00:00.000Z');   // frozen: the stamp stays as it was
+  assert.equal(ro.blockSyncUrl, 'https://example.test/listA');
+  ro.recordBlockBan('9.9.9.9');                                      // no record on a read-only store
+  assert.equal(ro.blockEntry('9.9.9.9'), undefined);
+  assert.equal(ro.markBlockRemoved('5.1.1.1'), false);
+
+  const after = EventStore.open(dir);   // disk unchanged: the blocked launch never wrote
+  assert.equal(after.blockSyncUrl, 'https://example.test/listA');
+  assert.deepEqual([...after.blockBans.keys()], ['5.1.1.1']);
 
   fs.rmSync(dir, { recursive: true, force: true });
 });

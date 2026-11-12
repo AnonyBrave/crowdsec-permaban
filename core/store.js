@@ -1,6 +1,7 @@
 // Event store for the Node port: an append-only NDJSON log (`events.ndjson`) plus a small side file `state.json`
-// (auto_bans, notified IPs, and the local deltas: which decisions this app marked expired, which rows retention
-// deleted). Same tables/semantics as src/PermaBan.Core/Store/SqliteEventStore.cs:
+// (auto_bans, notified IPs, the lifetime count of permanent bans this app issued, the imported-list IPs the app
+// manages and when the list was last fetched, and the local deltas: which decisions this app marked expired, which
+// rows retention deleted). Same tables/semantics as src/PermaBan.Core/Store/SqliteEventStore.cs:
 //   events(source,id) primary key, ip_state.notified, auto_bans(ip).
 // Timestamps are ISO-8601 UTC strings, so day ranges and "older than" comparisons are plain string ordering.
 //
@@ -68,6 +69,10 @@ export class EventStore {
     this.notified = new Set();          // ips already notified (notification dedup)
     this.expiredOverrides = new Set();  // decision ids this app marked expired locally
     this.deletedKeys = new Set();       // rows retention removed locally
+    this.bansIssuedTotal = 0;           // lifetime count of permanent bans issued by this app, persisted as `autoBansTotal`
+    this.blockBans = new Map();         // imported-list IPs the app manages: ip -> {ip, addedAt, removedAt}
+    this.blockSyncAt = null;            // last successful list fetch (ISO), persisted so a restart keeps its schedule
+    this.blockSyncUrl = null;           // which URL that fetch came from — changing the list resets the schedule on purpose
     this.appendedSinceCompact = 0;
   }
 
@@ -92,6 +97,14 @@ export class EventStore {
       for (const ip of st.notified ?? []) this.notified.add(ip);
       for (const k of st.deletedKeys ?? []) { this.deletedKeys.add(k); this.events.delete(k); }
       for (const id of st.expiredOverrides ?? []) this.expiredOverrides.add(Number(id));
+      // A counter written by an earlier version, a bad value, or none at all → start from zero; never throw on load.
+      const total = Number(st.autoBansTotal ?? 0);
+      if (Number.isFinite(total) && total >= 0) this.bansIssuedTotal = Math.floor(total);
+      // The imported blocklist: IPs the app manages, when they landed, when they were first seen missing. A restart
+      // resumes from here — an IP that left the list yesterday is unbanned on schedule today, not forgotten.
+      for (const b of st.blockBans ?? []) this.blockBans.set(b.ip, { ip: b.ip, addedAt: b.addedAt ?? null, removedAt: b.removedAt ?? null });
+      if (typeof st.blockSyncAt === 'string' && st.blockSyncAt) this.blockSyncAt = st.blockSyncAt;
+      if (typeof st.blockSyncUrl === 'string' && st.blockSyncUrl) this.blockSyncUrl = st.blockSyncUrl;
     } catch { /* no state yet */ }
 
     // Re-apply the local deltas recorded by earlier launches.
@@ -154,8 +167,12 @@ export class EventStore {
     return marked;
   }
 
+  /// Records one permanent ban issued by this app — the pipeline's auto-ban and the UI Ban button both come here.
+  /// The lifetime counter counts **issuances**: a new IP is +1, re-recording an IP already tracked (a refresh of its
+  /// decision id) is not. Removing/external-unban (`removeAutoBan`) never decrements — bans issued stay counted.
   recordAutoBan(ip, decisionId, country, score, reason) {
     if (this.readOnly) return;   // the ban is issued on the server, only the local record is skipped
+    if (!this.autoBans.has(ip)) this.bansIssuedTotal++;
     this.autoBans.set(ip, { ip, decisionId: decisionId ?? null, country, score, reason, bannedAt: ISO(Date.now()) });
   }
 
@@ -165,6 +182,48 @@ export class EventStore {
   }
 
   markNotified(ips) { for (const ip of ips) this.notified.add(ip); }
+
+  // ── imported blocklist ───────────────────────────────────────────────
+  /// An IP from the imported list that this app has banned. The permanent ban itself goes through `recordAutoBan`
+  /// (same lifetime counter, same "by app" flag in the Banned view); here we only track what the list owns: when it
+  /// landed and — once missing from a refreshed list — when it was first seen gone, so the configured unban delay is measured.
+  recordBlockBan(ip) {
+    if (this.readOnly) return;   // ban issued on the server, local records skipped like every read-only launch
+    const entry = this.blockBans.get(ip) ?? { ip, addedAt: ISO(Date.now()), removedAt: null };
+    entry.removedAt = null;      // present again after a removal window → back on the list
+    this.blockBans.set(ip, entry);
+  }
+
+  /// First sighting that an IP is absent from the refreshed list. Returns true when this cycle marks it.
+  markBlockRemoved(ip) {
+    if (this.readOnly) return false;
+    const e = this.blockBans.get(ip);
+    if (!e || e.removedAt) return false;
+    e.removedAt = ISO(Date.now());
+    return true;
+  }
+
+  /// The list ban is done with: unbanned (or already gone on the server), so tracking stops and a later re-add bans anew.
+  completeBlockUnban(ip) {
+    if (this.readOnly) return;
+    this.blockBans.delete(ip);
+    this.autoBans.delete(ip);   // "by app" flag drops with it, same as any unban
+  }
+
+  /// The schedule stamp of the last successful list fetch, and the URL it came from. `syncBlocklist` reads both: a new
+  /// URL is fetched on its next cycle whatever the old schedule says; switching back to a list that ran earlier keeps
+  /// its tracked IPs (unbans already done stay done) and refetches immediately.
+  setBlockSync(url, iso) { if (!this.readOnly) { this.blockSyncUrl = url; this.blockSyncAt = iso; } }
+
+  blockTracked() { return [...this.blockBans.values()]; }
+  /// One tracked list IP (undefined when the list does not own it). The pipeline reads entries directly — a 140k list
+  /// must stay O(1) per lookup, never a scan of the tracked map.
+  blockEntry(ip) { return this.blockBans.get(ip); }
+
+  blocklistSnapshot() {
+    const tracked = [...this.blockBans.values()];
+    return { tracked: tracked.length, pendingRemoved: tracked.filter((b) => b.removedAt).length };
+  }
 
   /// Persist one cycle: state.json (auto-bans, notified IPs, deltas) and — when the log grew enough — a full rewrite.
   persist() {
@@ -177,6 +236,10 @@ export class EventStore {
         notified: [...this.notified],
         expiredOverrides: [...this.expiredOverrides],
         deletedKeys: [...this.deletedKeys],
+        autoBansTotal: this.bansIssuedTotal,
+        blockSyncAt: this.blockSyncAt,
+        blockSyncUrl: this.blockSyncUrl,
+        blockBans: [...this.blockBans.values()],
       }, null, 2));
 
       if (compact) {
@@ -333,6 +396,10 @@ export class EventStore {
   isAutoBanned(ip) { return this.autoBannedIps().has(ip); }
   autoBannedIps() { return new Set(this.autoBans.keys()); }
   notifiedIps() { return new Set(this.notified); }
+
+  /// Lifetime count of permanent bans issued by this app, restored from `state.json` on load. The Banned view's
+  /// "by app" flag follows the live set (a ban unbanned externally drops out of it), so this counter is not that set's size.
+  autoBansTotal() { return this.bansIssuedTotal; }
 }
 
 function normalizeEvent(e, now) {

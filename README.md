@@ -4,7 +4,10 @@ Score-based CrowdSec Web UI watcher with score-gated permanent auto-bans, dynami
 Docker image + Compose deployment.
 
 Watches your **CrowdSec Web UI** and permanently bans aggressive, recidivist attacker IPs from foreign countries —
-with a scored candidate list, one-click Ban/Unban for everything else, and a dynamic web UI fed by live cycles.
+with a scored candidate list, one-click Ban/Unban for everything else, and a dynamic web UI fed by live cycles. It also
+imports an IP blocklist (the boestad abuseipdb feed by default): every listed public IP is permanent-banned on arrival,
+the list re-downloads on the interval you set in minutes/hours, and IPs missing from a refreshed listing are unbanned
+after the configured grace window.
 
 > **Warning — vibe-coded project.** This repository is AI-generated/assisted, experimental and continuously evolving. It has not received a formal code review, security audit, production QA cycle, or performance guarantee. Use it at your own risk on trusted networks only.
 
@@ -30,6 +33,7 @@ Open **http://127.0.0.1:8780**. A scheduled task is the right way to start it at
 | `PERMABAN_USERNAME` / `PERMABAN_PASSWORD` | seed credentials while no encrypted side file exists; a Save in Settings writes them encrypted and takes over |
 | `PERMABAN_WEBHOOK_URL` | ntfy-style topic URL — first run only |
 | `PERMABAN_POLL_SECONDS` | cycle interval (min 5) — first run only |
+| `PERMABAN_BLOCKLIST_URL`, `PERMABAN_BLOCKLIST_ENABLED` (`1`/`0`), `PERMABAN_BLOCKLIST_REFRESH_MINUTES` (min 1), `PERMABAN_BLOCKLIST_UNBAN_MINUTES` (min 0 = unban the same cycle), `PERMABAN_BLOCKLIST_CAP_PER_CYCLE` (min 1) | imported blocklist: URL, switch, refresh interval in minutes, removal→unban grace, per-cycle ban+unban cap — first run only; see *Imported blocklist* |
 | `PERMABAN_START_PAUSED` | start with the poll loop parked (tests use it; production never sets it) |
 
 Anything the environment seeds is reported as an activity line: `Settings seeded from environment: …`. Empty or unset
@@ -39,8 +43,9 @@ always beat the environment on the next start.
 ## What it does
 
 Every 60 s (configurable) a cycle: fetches all alerts and ban decisions the Web UI exposes (paged, 200/page, expired
-included), stores them locally with **the full raw JSON of every event**, scores every IP over the retained window
-(90 days by default), applies the ban policy, reconciles app-ban state, emits a snapshot to every connected browser.
+included), stores them locally with **the full raw JSON of every event**, runs the imported-list refresh when it is due
+(see *Imported blocklist*), scores every IP over the retained window (90 days by default), applies the ban policy,
+reconciles app-ban state, emits a snapshot to every connected browser.
 
 | Rule | Default condition |
 |---|---|
@@ -66,11 +71,54 @@ Web UI's cache window; a decision deleted on the server disappears from the list
 the lookback window and marked expired locally, keeping the Banned view accurate — which also makes an externally
 unbanned IP a candidate again on the next cycle.
 
+## Imported blocklist
+
+Settings → **Imported blocklist** card: enabled switch, list URL, refresh interval in minutes, unban grace in minutes,
+per-cycle action cap. The shipped default is [boestad/blocklist-abuseipdb](https://github.com/borestad/blocklist-abuseipdb)
+at ~100 % confidence, 30-day window:
+
+```
+https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4
+```
+
+Use one of the sibling files for a shorter/longer window (`…-7d.ipv4`, `…-14d.ipv4` …); do not point at `-all`. Any
+text list works as long as each line starts with an IP — comment tails after `#`, header lines, CSV rows, CIDR prefixes
+(the base address is what gets banned), CRLF and BOM all parse. IPv4 **and** canonical IPv6 are read.
+
+How it runs in a cycle:
+
+- **Refresh:** the list is downloaded when its interval (minutes; 60 = hourly) has elapsed since the last successful
+  fetch, and immediately on the next cycle after you change the URL. The stamp of the last real download lives in
+  `state.json`, so the schedule survives a restart.
+- **Bans:** every public IP on the list is permanent-banned with the app's own duration/prefix/scenario (reason
+  `permaban: imported blocklist`), counted on the lifetime "auto-bans issued" card and tagged `by app`. An IP the app
+  already rule-banned is *adopted* by the list — no second POST. A ban issued by someone else with an active decision
+  is **not** adopted, so removing it from your list can never unban a foreign decision. The per-cycle cap counts bans
+  **and** unbans together (default 200), spreading a big list over several cycles — a flood of new arrivals lands in
+  bounded batches.
+- **Unbans:** an IP missing from the refreshed listing has its absence stamped the first time it is seen gone; once the
+  grace window (`Blocklist unban delay`, minutes measured from that stamp) runs out, the app's own ban on it is deleted
+  by decision id and list ownership ends. `0` unbans in the same cycle the IP was first found missing. If its ban has
+  already vanished server-side, ownership is just dropped; if it reappears later on the list, it is banned anew.
+- **Private addresses are dropped by the parser** (RFC1918, loopback, link-local, CGNAT `100.64/10`, multicast and the
+  IPv6 equivalents): one malformed public list can never freeze a LAN host or your gateway.
+- **Failures degrade gracefully:** a failed fetch logs an activity line and keeps tracked state, bans, counters and the
+  old schedule untouched — no cycle ever unbans in bulk because a download broke. The dashboard card keeps showing the
+  number of IPs the list owns, even between refreshes; it never goes blank on reload (`blocklistTracked`, added/unbanned
+  this cycle come with every snapshot).
+
+Env seeds are first-run only, like all settings: `PERMABAN_BLOCKLIST_URL` / `_ENABLED` (1/0) / `_REFRESH_MINUTES` (≥ 1)
+/ `_UNBAN_MINUTES` (≥ 0) / `_CAP_PER_CYCLE` (≥ 1); saved UI values win from then on.
+
 ## Web UI (dynamic)
 
 Five views fed by a Server-Sent-Events stream (`/events`), so charts, verdicts and rows update without reload:
 
-- **Dashboard** — cards (events stored, candidates, active bans, auto-bans issued this cycle); recidivism donut
+- **Dashboard** — five cards: events stored, candidates, active bans, **auto-bans issued by the app over its lifetime**
+  (this cycle's number underneath), and **blocklist bans** — how many IPs the imported list owns right now, with added /
+  unbanned this cycle under it. Both counters come from what is persisted in `state.json` and carried by `/api/state`,
+  every SSE snapshot and `/healthz`, so reloading a page never blanks an indicator; a cycle that skipped the list download
+  reports its tracked count as before; recidivism donut
   (share of currently-banned IPs with ≥ 2 stored bans); events-per-day chart (last 14 days, gap-filled): every day
   stands on an axis line, bar heights are **√-compressed** (`height = √events · band/√max`) so one spike of thousands
   cannot flatten a quiet week into invisible hairlines, and neighbouring big days keep distinct bars — a day with events
@@ -99,8 +147,10 @@ Five views fed by a Server-Sent-Events stream (`/events`), so charts, verdicts a
   the same wording as the classic tray app (`AUTO-BANNED ip — recidivist (3 bans)`, `Marked N decision(s) expired …`).
 - **Settings** — connection card (URL / username / password / poll interval / Test connection), auto-ban switches with a
   live one-line summary of how the safe list is treated right now, score weights + formula preview, safe list & gate
-  threshold, candidate rules, ban length/prefix/scenario/retention, data folder line. Save applies and persists; the
-  header **Auto-ban** toggle and the gate checkbox apply instantly, no Save.
+  threshold, candidate rules, ban length/prefix/scenario/retention, data folder line, and the **Imported blocklist** card
+  (enabled switch, URL, refresh interval in minutes, unban grace from the first refreshed absence, per-cycle cap — see
+  *Imported blocklist*). Save applies and persists; the header **Auto-ban** toggle and the gate checkbox apply instantly,
+  no Save.
 
 | Endpoint | Purpose |
 |---|---|
@@ -124,9 +174,9 @@ Everything lives in `%LOCALAPPDATA%\PermaBanNode\`:
 
 | File | Content |
 |---|---|
-| `settings.json` | all settings **except** credentials — camelCase keys: `baseUrl`, `username`(empty), `password`(empty), `pollIntervalSeconds`, `webUiLookbackHours`, `safeCountries`, `autoBanEnabled`, `permanentDuration`, `banScenario`, `banReasonPrefix`, `historyRetentionDays`, `notificationsEnabled`, `notifyWebhookUrl`, `notifyFormat`(`text`/`json`), `startMinimized`, `initialized`, `scoring{…}` |
+| `settings.json` | all settings **except** credentials — camelCase keys: `baseUrl`, `username`(empty), `password`(empty), `pollIntervalSeconds`, `webUiLookbackHours`, `safeCountries`, `autoBanEnabled`, `permanentDuration`, `banScenario`, `banReasonPrefix`, `historyRetentionDays`, `notificationsEnabled`, `notifyWebhookUrl`, `notifyFormat`(`text`/`json`), `startMinimized`, `initialized`, `scoring{…}`, `blocklistEnabled`, `blocklistUrl`, `blocklistRefreshMinutes`(≥ 1), `blocklistUnbanMinutes`(≥ 0), `blocklistCapPerCycle`(≥ 1) |
 | `credentials.enc` + `key.bin` | username/password sealed with AES-256-GCM under a per-user random key file — the portable stand-in for DPAPI, which Node cannot reach. A corrupt/foreign side file leaves credentials empty; nothing crashes. |
-| `events.ndjson` + `state.json` | append-only event log (full raw JSON per event) plus the compacted overlay: auto-bans, notified IPs, locally-expired decision ids, retention-deleted keys. Full rewrite when either grows past 20 000 lines. ISO-8601 UTC strings, so day buckets and "older than" are plain string ordering |
+| `events.ndjson` + `state.json` | append-only event log (full raw JSON per event) plus the compacted overlay: auto-bans, notified IPs, locally-expired decision ids, retention-deleted keys, the **lifetime count of app-issued bans** (`autoBansTotal`), and what the imported blocklist owns — each tracked IP's added + first-absence timestamps, plus `blockSyncAt`/`blockSyncUrl`, the URL and stamp of its last successful download. Full rewrite when either grows past 20 000 lines. ISO-8601 UTC strings, so day buckets and "older than" are plain string ordering |
 
 Rows are keyed **source + kind + id**: the Web UI numbers its alert and decision tables independently (both start at 1), so
 alert 12 and decision 12 are two different rows arriving in one fetch — keying on `source:id` alone let a later write
@@ -165,14 +215,19 @@ core/source.js  →  core/store.js  →  core/scoring.js  →  core/rules.js  �
 ```
 
 - `source.js` — Basic-auth paged fetch, ban/unban POSTs, typed auth/source exceptions; pluggable for other sources.
-- `store.js` — append-only log + overlay files; aggregates, daily counts, top series, auto-ban/notified/expired state;
-  the open-with-fallback chain; read-only no-op semantics.
+- `store.js` — append-only log + overlay files; aggregates, daily counts, top series, auto-ban/notified/expired state,
+  the imported list's ownership (added / first-absence timestamps) and its last-download stamp (`blockSyncAt`,
+  `blockSyncUrl`), the lifetime count of app-issued bans shown on the dashboard card; the open-with-fallback chain;
+  read-only no-op semantics.
 - `scoring.js` — pure static scoring: per-IP profile with `eventCount`, `scenarioCount`, `banCount`, first/last seen,
   country, `currentlyBanned`, `isRecidivist`, `isAggressive`, `isCandidate`.
 - `rules.js` — policy: verdict (`auto-ban` / `suggest` / `none`) + the reason string used by UI and notifications.
-- `pipeline.js` — fetch → upsert → retention → liveness sync → score → rules → auto-ban → notify → reconcile → snapshot,
-  one cycle at a time (joins an in-flight cycle like a semaphore), 30 s backoff on source failure; emits each snapshot to
-  SSE clients via `onCycle`.
+- `blocklist.js` — parsing a downloaded list (comment/CSV/CIDR lines, IPv4 + canonical IPv6, private ranges dropped)
+  and the plain `global fetch` download with its timeout; the pipeline injects the fetcher so the flows are testable
+  offline. See *Imported blocklist* for the semantics.
+- `pipeline.js` — fetch → upsert → retention → liveness sync → imported-list refresh (when due) → score → rules →
+  auto-ban + list bans → notify → reconcile → snapshot, one cycle at a time (joins an in-flight cycle like a semaphore),
+  30 s backoff on source failure; emits each snapshot to SSE clients via `onCycle`.
 - `format.js` — en-US grouped numbers (`n0`), reason strings, duration text.
 - `public/charts.js` — the dashboard geometry as pure functions: √-scaled bar heights (`∝ √events`, normalized to the series
   max, so big days stay distinguishable), minimum visible stub per event-day, muted zero-day stubs, number positions above
@@ -188,18 +243,26 @@ core/source.js  →  core/store.js  →  core/scoring.js  →  core/rules.js  �
 ## Tests
 
 ```powershell
-node --test tests/        # 76 offline tests — no real server, no network beyond localhost
+node --test tests/        # 90 offline tests — no real server, no network beyond localhost; the imported list is fed through an injectable fetcher, never downloaded in a test
 ```
 
-rules **11**, scoring **7** (candidate flags included), store **18** (read-only mode, scratch fallback, compaction,
-per-IP profile with raw JSON, garbage dates from the API normalized, alert and decision rows at the same id kept apart),
-pipeline **7** (baseline, no double ban, external unban, safe-list gate, master switch,
-read-only cycle), server **6** — the E2E spawns the real `server.js` on an ephemeral port (`PERMABAN_PORT=0`) with the poll
+rules **11**, scoring **7** (candidate flags included), store **22** (read-only mode, scratch fallback, compaction,
+per-IP profile with raw JSON, garbage dates from the API normalized, alert and decision rows at the same id kept apart,
+the lifetime ban counter counting issuances only + surviving reloads, and the imported list's overlay round-trip —
+ownership timestamps, first-absence marking, unban dropping ownership *and* the app-ban flag, URL + schedule stamp
+restored on relaunch, all frozen under a read-only launch),
+pipeline **11** (baseline, no double ban, external unban, safe-list gate, master switch, read-only cycle, plus four
+blocklist flows: every public list IP banned and counted on the lifetime total, the refresh schedule gating + the unban
+firing once its grace window runs out via the live decision id, the per-cycle cap spreading a big list over cycles,
+and never adopting an active ban somebody else issued), server **6** — the E2E spawns the real `server.js` on an ephemeral port (`PERMABAN_PORT=0`) with the poll
 loop parked (`PERMABAN_START_PAUSED=1`, production never sets it) against a mock nginx-Basic Web UI and asserts what a
 browser sees: static HTML/CSS/JS bytes, SSE frames in order, one-click Ban/Unban round-trip, `/healthz` + profile +
-export routes; plus settings persistence with encrypted credentials (webhook fields included), env-seeding on first run —
+export routes; plus settings persistence with encrypted credentials (webhook fields included, **and the five blocklist fields in both the Settings round-trip and env-seeding on first run**),
+env-seeding on first run —
 including that an **empty** env var leaves the default alone (`PERMABAN_POLL_SECONDS: ''` must not invent a 5 s cycle),
-clean shutdown, `/api/inspect`: bars inside the box, every bar paired with its own day's number above it, quiet days
+clean shutdown (an unreachable list URL degrades the cycle to exactly one `fetch failed` activity line: zero list bans,
+tracked 0, saved settings retained across a restart; and the E2E pins that the lifetime counter survives `/api/state`,
+an SSE `hello` frame, idle cycles, and reopening the store between launches), `/api/inspect`: bars inside the box, every bar paired with its own day's number above it, quiet days
 as stubs on the axis, the spike keeping small days visible, scenario labels prefix-free with `full` intact — and the
 **fresh-page test**: `/api/state` carries the last snapshot (`cycle`, null before any cycle), and a browser connecting
 between two polls gets that snapshot in its single `hello` frame, so loading a tab needs no "Refresh now" click. **sort** 6
@@ -225,7 +288,14 @@ chart + scenarios + countries in one go. The third test runs the real `loadState
 server: bars, cards, status `Connected` and scenario rows must appear from `/api/state` alone — no SSE frame, no "Refresh
 now" click — which is exactly the page-load bug it fixes.
 
-**grid** 4 — `public/app.js` under the same shim, this time with `<th data-key>` header cells (click handlers, `data-numeric`, the
+**blocklist** 5 — the parser fixtures for the list format: comment tails + header lines stripped, CSV rows, CIDR prefix
+→ base address, CRLF + BOM, duplicate lines counting once; junk and non-addresses dropped; private v4 (10/8, 172.16/12,
+192.168/16, loopback, link-local, CGNAT `100.64/10`, multicast) filtered out of a public list; canonical IPv6 accepted in
+both full and compressed form (stored lowercase), `fe80`/`ff*`/`fc|fd` ranges dropped, zone ids (`%eth0`) and bracketed
+URL forms rejected; empty/comment-only input yields nothing. The download seam is never exercised against the network:
+the pipeline tests inject their own fetcher.
+
+**grid** 5 — `public/app.js` under the same shim, this time with `<th data-key>` header cells (click handlers, `data-numeric`, the
 ▲/▼ indicator) and both filter inputs, so real header clicks and typed text drive the page's own code. Every column of both grids is
 sorted on a first click in the right direction (numbers high-first, text low-first, empty values first ascending / last descending),
 the displayed cell order follows the sorted rows, a second click reverses it, ties keep the server's ranking, and only the active header
@@ -237,7 +307,10 @@ the browser), so the text stays byte-stable and typed needles match exactly; a t
 also proved column-by-column through `searchCandidate` / `searchBanned`: each sortable column gets a distinctive value (a date day,
 `9001` + `9,001`, a marker word) that must be findable — this is the regression guard for the filter box that searched only
 ip/country/scenario/origin and answered empty for events/bans/score/created/expires, and it pairs with **ui**'s static check that every
-`data-key` column is named in its grid's builder.
+`data-key` column is named in its grid's builder. The fifth test drives the dashboard cards and the Settings form from a
+state snapshot: both counter cards show what the snapshot carries (the lifetime total, not this cycle's number), the
+blocklist card shows tracked/added/unbanned as sent, an older snapshot without `autoBansTotal` falls back to the cycle
+count, and every saved blocklist field lands in its input.
 
 ## Docker app
 
@@ -304,7 +377,7 @@ and `/healthz` stays green (see *Data & configuration*). `package.json` at the r
 
 ## Publishing & running your own instance
 
-Layout: everything lives at the repository root — `server.js`, `core/`, `public/`, `tests/`, `Dockerfile`,
+Layout: everything lives at the repository root — `server.js`, `core/` (source, store, settings, scoring, rules, blocklist, pipeline, format), `public/`, `tests/`, `Dockerfile`,
 `compose.yaml`, `package.json`, `.dockerignore`, plus this `README.md`, `LICENSE`, `.gitignore`, `.gitattributes`, and the
 publishing workflow under `.github/workflows/`. The Docker build context is the root, and `.dockerignore` keeps `tests/`,
 markdown, `Dockerfile` and `compose.yaml` out of the image. Nothing personal ships in the code — no credentials, no real Web

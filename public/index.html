@@ -37,7 +37,10 @@
           <div class="hint muted"><a href="/export/events.ndjson" download>Download raw history (NDJSON, full JSON of every event)</a></div></div>
         <div class="card"><h3>Candidates</h3><div class="big" id="statCandidates">0</div></div>
         <div class="card"><h3>Active bans</h3><div class="big" id="statBanned">0</div></div>
-        <div class="card"><h3>Auto-bans issued this cycle</h3><div class="big" id="statIssued">0</div></div>
+        <div class="card"><h3>Auto-bans issued</h3><div class="big" id="statIssuedTotal">0</div>
+          <div class="hint muted">this cycle: <span id="statIssued">0</span></div></div>
+        <div class="card"><h3>Blocklist bans</h3><div class="big" id="statBlockTotal">0</div>
+          <div class="hint muted">added <span id="statBlockAdded">0</span> · unbanned <span id="statBlockUnbanned">0</span></div></div>
       </div>
 
       <div class="charts">
@@ -160,6 +163,19 @@
             <label>Reason prefix<input id="fPrefix" /></label>
             <label>Ban scenario<input id="fScenario" /></label>
             <label>Retention days<input id="fRet" type="number" min="1" /></label>
+          </div>
+
+          <div class="card">
+            <h3>Imported blocklist</h3>
+            <label class="switch"><input type="checkbox" id="fBlockEnabled" /> Ban every IP in the list (permanent, same length as an auto-ban)</label>
+            <label title="One IP per line is read; comments after # and CIDR prefixes are accepted. The default is borestad/blocklist-abuseipdb, 30-day ~100% confidence IPv4 list."
+                   >List URL<input id="fBlockUrl" /></label>
+            <label>Refresh every (minutes)<input id="fBlockRefreshMin" type="number" min="1" /></label>
+            <label title="Grace window measured from the first refresh that found the IP missing. 0 = unban the same cycle it leaves the list."
+                   >Unban after absence (minutes)<input id="fBlockUnbanMin" type="number" min="0" /></label>
+            <label title="Cap of bans + unbans issued by the list in one cycle, so a 140k list lands over several cycles instead of flooding the Web UI at once."
+                   >Per-cycle cap<input id="fBlockCap" type="number" min="1" /></label>
+            <div class="hint muted">The app bans what the list owns and unbans it when it leaves for the configured window. Bans already issued by someone else are never adopted, so leaving the list never unbans them. First run: seed with <code>PERMABAN_BLOCKLIST_URL</code>, <code>_ENABLED</code>, <code>_REFRESH_MINUTES</code>, <code>_UNBAN_MINUTES</code>, <code>_CAP_PER_CYCLE</code>.</div>
           </div>
 
           <div class="card">

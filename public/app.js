@@ -120,7 +120,15 @@ function renderCycle(c) {
   $('statTotal').textContent = n0(c.totalEvents);
   $('statCandidates').textContent = c.candidates.length;
   $('statBanned').textContent = c.banned.length;
+  // Lifetime count (persisted in `state.json`, restored on load) as the card's number, this cycle underneath: a page
+  // opened after quiet cycles shows what the app has issued over time, and reloads never wipe it.
+  $('statIssuedTotal').textContent = c.autoBansTotal ?? c.autoBansIssued;
   $('statIssued').textContent = c.autoBansIssued;
+  // The imported list keeps its own counters: what it owns right now, and what this cycle added / unbanned. A cycle
+  // that skipped the fetch reports the tracked number from the store, so the card never goes blank between refreshes.
+  $('statBlockTotal').textContent = c.blocklistTracked ?? 0;
+  $('statBlockAdded').textContent = c.blocklistAdded ?? 0;
+  $('statBlockUnbanned').textContent = c.blocklistUnbanned ?? 0;
 
   guard('donut', () => renderDonut(c.dashboard.bannedIps, c.dashboard.recidivistBannedIps));
   guard('sparkline', () => renderSparkline(c.dashboard.dailyEvents));
@@ -301,6 +309,11 @@ function fillSettingsForm(s) {
   $('fNotify').checked = s.notificationsEnabled !== false;
   $('fWebhook').value = s.notifyWebhookUrl ?? '';
   $('fNotifyFmt').value = s.notifyFormat === 'json' ? 'json' : 'text';
+  $('fBlockEnabled').checked = !!s.blocklistEnabled;
+  $('fBlockUrl').value = s.blocklistUrl ?? '';
+  $('fBlockRefreshMin').value = s.blocklistRefreshMinutes ?? 60;
+  $('fBlockUnbanMin').value = s.blocklistUnbanMinutes ?? 1440;
+  $('fBlockCap').value = s.blocklistCapPerCycle ?? 200;
   updateHints();
 }
 
@@ -314,6 +327,11 @@ function collectForm() {
     banReasonPrefix: $('fPrefix').value.trim(), banScenario: $('fScenario').value.trim(),
     autoBanEnabled: $('fAutoBan').checked, notificationsEnabled: $('fNotify').checked,
     notifyWebhookUrl: $('fWebhook').value.trim(), notifyFormat: $('fNotifyFmt').value === 'json' ? 'json' : 'text',
+    blocklistEnabled: $('fBlockEnabled').checked,
+    blocklistUrl: $('fBlockUrl').value.trim(),
+    blocklistRefreshMinutes: num('fBlockRefreshMin', settings.blocklistRefreshMinutes ?? 60),
+    blocklistUnbanMinutes: (() => { const v = Math.floor(Number($('fBlockUnbanMin').value)); return Number.isFinite(v) && v >= 0 ? v : (settings.blocklistUnbanMinutes ?? 1440); })(),
+    blocklistCapPerCycle: num('fBlockCap', settings.blocklistCapPerCycle ?? 200),
     safeCountries: $('fSafe').value.split(',').map((c) => c.trim()).filter(Boolean),
     scoring: {
       recidivistBanThreshold: num('fRecT', settings.scoring.recidivistBanThreshold),

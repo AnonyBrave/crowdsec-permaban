@@ -3,17 +3,20 @@
 import { scoreProfiles } from './scoring.js';
 import { evaluate, describeCandidate, Action } from './rules.js';
 import { SourceAuthException, SourceException } from './source.js';
+import { fetchBlocklist, parseBlocklist } from './blocklist.js';
 
 const DASHBOARD_DAYS = 14;
 const DASHBOARD_TOP = 5;
 
 export class Pipeline {
-  /// getSettings: () => settings (live), store, source (ISource+IBanExecutor), notifier(message,title)
-  constructor({ getSettings, store, source, log }) {
+  /// getSettings: () => settings (live), store, source (ISource+IBanExecutor), log; `blockFetcher(url)` is the list-download seam
+  /// (`fetchBlocklist` in production, a fixture in tests) so every blocklist flow stays offline.
+  constructor({ getSettings, store, source, log, blockFetcher = fetchBlocklist }) {
     this.getSettings = getSettings;
     this.store = store;
     this.source = source;
     this.log = log ?? (() => {});
+    this.blockFetcher = blockFetcher;
     this.notifier = () => {};
     this.running = false;
     this.timer = null;
@@ -21,6 +24,109 @@ export class Pipeline {
   }
 
   setSource(source) { this.source = source; }
+
+  /// The imported-list step, run right after the liveness sync (so `activeDecisions()` is current). Download when due:
+  /// no fetch recorded for this URL yet, or `blocklistRefreshMinutes` elapsed. A failed fetch only logs — tracked state
+  /// and bans survive untouched, because nothing here may unban anything on a bad HTTP day: an IP leaves the app's ban
+  /// list only when a **real refreshed listing** is missing it for `blocklistUnbanMinutes`.
+  /// Bans are permanent (same duration/prefix/scenario as every auto-ban) and count in the lifetime counter. A ban
+  /// already on the server that the list did not issue stays untouched: this step owns only what it issued, so leaving
+  /// the list never unbans a decision created by someone else. `blocklistCapPerCycle` bounds one cycle's API load —
+  /// a big list is applied over several cycles instead of flooding the Web UI with thousands of POSTs at once.
+  async syncBlocklist(s, result) {
+    const url = String(s.blocklistUrl ?? '').trim();
+    const enabled = !!s.blocklistEnabled;
+
+    result.blocklistEnabled = enabled;
+    result.blocklistUrl = url;
+    result.blocklistAdded = 0;
+    result.blocklistUnbanned = 0;
+    result.blocklistTracked = this.store.blocklistSnapshot().tracked;
+
+    if (!enabled || !url) { result.blocklistSkip = 'disabled'; return { added: [], unbanned: [] }; }
+
+    // The schedule lives in `state.json`: restarts keep it, and a URL change refetches immediately (see setBlockSync).
+    const refreshMs = Math.max(1, Math.floor(Number(s.blocklistRefreshMinutes) ?? 60)) * 60_000;
+    const lastAt = this.store.blockSyncUrl === url && this.store.blockSyncAt ? Date.parse(this.store.blockSyncAt) : null;
+    if (Number.isFinite(lastAt) && Date.now() - lastAt < refreshMs) { result.blocklistSkip = 'not due'; return { added: [], unbanned: [] }; }
+
+    let text;
+    try {
+      text = await this.blockFetcher(url);
+    } catch (e) {
+      this.log(`Blocklist fetch failed (${url}): ${e.message} — tracked state and bans kept.`);
+      result.blocklistSkip = 'fetch failed';
+      return { added: [], unbanned: [] };
+    }
+
+    const ips = parseBlocklist(text);
+    const cap = Math.max(1, Math.floor(Number(s.blocklistCapPerCycle) ?? 200));
+    const unbanMs = Math.max(0, Math.floor(Number(s.blocklistUnbanMinutes) ?? 0)) * 60_000;
+
+    // Bans: a fresh IP on the list, and a re-added IP whose window was closed. Active server decisions count as
+    // "already blocked": no POST is issued for them, they are not adopted by the list (see above).
+    const byIp = new Map(this.store.activeDecisions().map((d) => [d.ip, d]));
+    const added = [];
+    let actions = 0;
+
+    for (const ip of ips) {
+      if (actions >= cap) break;
+      const entry = this.store.blockEntry(ip);
+      if (!entry) {
+        if (byIp.has(ip)) continue;                       // blocked by someone else — the list does not adopt it
+        if (this.store.isAutoBanned(ip)) { this.store.recordBlockBan(ip); continue; }   // app-banned by rules: adopt, no POST
+        const reason = `${s.banReasonPrefix}: imported blocklist`;
+        const ban = await this.source.ban(ip, s.permanentDuration, reason, s.banScenario);
+        if (!ban.success) { this.log(`BLOCKLIST BAN FAILED ${ip}: ${ban.message}`); continue; }
+        this.store.recordAutoBan(ip, null, '', 0, reason);   // lifetime counter + "by app" flag, same as every app ban
+        this.store.recordBlockBan(ip);
+        added.push(ip); actions++;
+        this.log(`BLOCKLIST-BANNED ${ip} — imported list (${url})`);
+      } else if (entry.removedAt) {
+        this.store.recordBlockBan(ip);                       // present again: close its removal window
+        if (!byIp.has(ip)) {
+          const reason = `${s.banReasonPrefix}: imported blocklist`;
+          const ban = await this.source.ban(ip, s.permanentDuration, reason, s.banScenario);
+          if (ban.success) {
+            this.store.recordAutoBan(ip, null, '', 0, reason);
+            added.push(ip); actions++;
+            this.log(`BLOCKLIST-BANNED ${ip} — back on the imported list (${url})`);
+          } else this.log(`BLOCKLIST BAN FAILED ${ip}: ${ban.message}`);
+        }
+      }
+    }
+
+    // Removals: entries missing from this refreshed list. The first absence stamps `removedAt`; the unban fires once
+    // the configured window has run, by decision id read from the live liveness-synced set.
+    const unbanned = [];
+    for (const e of [...this.store.blockTracked()]) {
+      if (actions >= cap) break;
+      if (ips.has(e.ip)) continue;                          // still on the list → nothing to do here
+      this.store.markBlockRemoved(e.ip);
+      const entry = this.store.blockEntry(e.ip);            // first absence sets removedAt in this cycle: not eligible yet
+      if (!entry.removedAt) continue;
+      if (Date.parse(entry.removedAt) + unbanMs > Date.now()) continue;   // window still open
+
+      const d = byIp.get(e.ip);
+      if (!d) {                                              // no active decision to delete → the list's ownership is done
+        this.store.completeBlockUnban(e.ip);
+        continue;
+      }
+      const r = await this.source.unban(d.id);
+      if (r.success) {
+        this.store.completeBlockUnban(e.ip);
+        unbanned.push(e.ip); actions++;
+        this.log(`BLOCKLIST-UNBANNED ${e.ip} — removed from the imported list (${url})`);
+      } else this.log(`BLOCKLIST UNBAN FAILED ${e.ip}: ${r.message}`);
+    }
+
+    result.blocklistAdded = added.length;
+    result.blocklistUnbanned = unbanned.length;
+    result.blocklistTracked = this.store.blocklistSnapshot().tracked;   // after removals, what the list owns now
+    result.blocklistSkip = null;
+    this.store.setBlockSync(url, new Date().toISOString());            // schedule stamp only for a real fetch
+    return { added, unbanned };
+  }
 
   start() {
     if (this.running) return;
@@ -96,6 +202,18 @@ export class Pipeline {
     const marked = this.store.markInvisibleDecisionsExpired(liveDecisionIds, lookbackStart);
     if (marked > 0) this.log(`Marked ${marked} decision(s) expired (no longer listed by the Web UI).`);
 
+    // 1.6) Imported blocklist — after the liveness sync so `activeDecisions()` is current for unban-by-id lookups,
+    // before scoring so list-banned IPs leave the candidate pool with `currentlyBanned`.
+    const bl = await this.syncBlocklist(s, result);
+
+    // List bans count in the same messages as rule auto-bans: a webhook sees every permanent ban this cycle issued.
+    const autoBannedNow = new Set();
+    const autoBanMessages = [];
+    for (const ip of bl.added) {
+      autoBannedNow.add(ip);                                  // protect from reconcile in the same cycle, like rule bans
+      autoBanMessages.push(`${ip} — imported list ban (${s.permanentDuration})`);
+    }
+
     // 2) Score. IPs already banned are not candidates: they belong in the Banned view and re-enter this list
     // when their ban expires.
     const profiles = scoreProfiles(this.store.aggregates(), s.scoring);
@@ -110,8 +228,6 @@ export class Pipeline {
     const firstRun = !s.initialized;
     const notified = new Set(this.store.notifiedIps());
     const newlyNotified = [];
-    const autoBannedNow = new Set();
-    const autoBanMessages = [];
     const failureMessages = [];
 
     // 3) Apply rules.
@@ -207,6 +323,9 @@ export class Pipeline {
     };
 
     result.autoBansIssued = autoBanMessages.length;
+    // The dashboard card needs both: what this cycle issued, and the lifetime count persisted in `state.json` — a page
+    // opened after an idle stretch must show the bans it has been issuing for weeks, not 0.
+    result.autoBansTotal = this.store.autoBansTotal();
     result.connected = true;
 
     if (result.newEvents > 0)

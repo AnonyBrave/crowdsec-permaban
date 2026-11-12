@@ -23,6 +23,16 @@ export const DEFAULT_SETTINGS = {
   notificationsEnabled: true,
   notifyWebhookUrl: '',           // ntfy-style POST (topic URL) for auto-ban / candidate alerts
   notifyFormat: 'text',           // text = plain body + Title header; json = {"title","message"}
+
+  // Imported blocklist: the app permanent-bans every IP in a downloaded list, refreshes it on a schedule, and unbans an
+  // IP once it has left the list for `blocklistUnbanMinutes` (0 → same cycle). `blocklistCapPerCycle` keeps one cycle's
+  // API load bounded: a big list is applied over several cycles, not in one flood of POSTs against the Web UI.
+  blocklistEnabled: true,
+  blocklistUrl: 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4',
+  blocklistRefreshMinutes: 60,     // minutes between list downloads; 60 = hourly
+  blocklistUnbanMinutes: 1440,    // grace window after an IP disappears from the list before its ban is removed
+  blocklistCapPerCycle: 200,       // max bans + unbans issued by the list per cycle (min 1)
+
   startMinimized: true,
   initialized: false,             // set after the first baseline sync (no notification storm on run 1)
   scoring: {
@@ -82,6 +92,23 @@ export function seedFromEnv(settings, env = process.env, { firstRun = true, seed
       const poll = Math.max(5, Math.floor(Number(raw)));
       if (Number.isFinite(poll)) { settings.pollIntervalSeconds = poll; applied.push('pollIntervalSeconds'); }
     }
+
+    // Blocklist seeds: the compose file can pick a list, its schedule, and the unban delay on the first run.
+    setStr('blocklistUrl', (env.PERMABAN_BLOCKLIST_URL ?? '').trim());
+    const en = (env.PERMABAN_BLOCKLIST_ENABLED ?? '').trim().toLowerCase();
+    if (en === '1' || en === 'true' || en === 'yes') { settings.blocklistEnabled = true; applied.push('blocklistEnabled'); }
+    else if (en === '0' || en === 'false' || en === 'no') { settings.blocklistEnabled = false; applied.push('blocklistEnabled'); }
+    const mins = (key, envName) => {
+      const v = Math.max(1, Math.floor(Number((env[envName] ?? '').trim())));
+      if ((env[envName] ?? '').trim() && Number.isFinite(v)) { settings[key] = v; applied.push(key); }
+    };
+    mins('blocklistRefreshMinutes', 'PERMABAN_BLOCKLIST_REFRESH_MINUTES');
+    const unban = (env.PERMABAN_BLOCKLIST_UNBAN_MINUTES ?? '').trim();   // 0 is a valid value: unban the cycle an IP leaves
+    if (unban) {
+      const m = Math.floor(Number(unban));
+      if (Number.isFinite(m) && m >= 0) { settings.blocklistUnbanMinutes = m; applied.push('blocklistUnbanMinutes'); }
+    }
+    mins('blocklistCapPerCycle', 'PERMABAN_BLOCKLIST_CAP_PER_CYCLE');
   }
 
   return applied;
