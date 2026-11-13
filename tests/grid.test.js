@@ -352,6 +352,19 @@ test('Grid_PaginationPaintsOnePageAndNavigates', () => {
   app.setPage('bannedGrid', 0);
   assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'going back repaints the same slice under the active sort');
 
+  // The painted buttons are valueless presence attributes (`data-page-prev` — dataset entry is `''`, falsy), so prev/next and the page-size
+  // select must be recognized by membership in `dataset`. Drive the host's real delegation handlers with synthetic events: this is exactly
+  // what a browser delivers when it dispatches from `innerHTML` markup into the static pager host.
+  els.bannedPager.listeners.click({ target: { dataset: { pageNext: '' } } });   // presence marker, empty string value — falsy in JS
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(1, 2)), 'the host\'s click delegation moves to the next row slice');
+
+  els.bannedPager.listeners.click({ target: { dataset: { pagePrev: '' } } });
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'prev delegation moves back and repaints that slice alone');
+
+  const sel = { dataset: { pagesize: '' }, value: '1' };   // same presence rule for the painted select
+  els.bannedPager.listeners.change({ target: sel });
+  assert.ok(/<span class="pg-range">1–1 sur 3<\/span>/.test(els.bannedPager.innerHTML), 'a delegated page-size change repaints the strip (delegation sees `in`, not truthiness)');
+
   click('bannedGrid', 'score');                    // numeric high-first: [10.0.0.9 (5599), 198.51.100.7 (1240), 8.8.8.8 (1000)], page state untouched
   const byScore = expectOrder(BANNED, 'score', -1);
   assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(byScore.slice(0, 1)), 'sorting repaints the same page under its new order');

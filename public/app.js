@@ -251,14 +251,17 @@ for (const name of Object.keys(grids)) {
   });
 
   const host = $(grids[name].pager);
+  // The page buttons are painted as presence attributes (`data-page-prev`, `data-page-next` — no value), so the delegation must test for
+  // membership with `in`: a real dataset entry is the empty string, and an empty string is falsy.
   host.addEventListener('click', (e) => {
-    const b = e.target ?? {};
-    if (b.dataset && b.dataset.pagePrev) setPage(name, grids[name].page - 1);
-    if (b.dataset && b.dataset.pageNext) setPage(name, grids[name].page + 1);
+    const ds = e.target?.dataset;
+    if (ds && 'pagePrev' in ds) setPage(name, grids[name].page - 1);
+    if (ds && 'pageNext' in ds) setPage(name, grids[name].page + 1);
   });
   host.addEventListener('change', (e) => {
-    const s = e.target ?? {};
-    if (s.dataset && s.dataset.pagesize) setPerPage(name, Number(s.value));
+    // Same presence-attribute rule as the buttons: `data-pagesize` has no value, so test membership and read the select's own value.
+    const ds = e.target?.dataset;
+    if (ds && 'pagesize' in ds) setPerPage(name, Number(e.target.value));
   });
 }
 
