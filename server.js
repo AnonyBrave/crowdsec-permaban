@@ -260,7 +260,7 @@ const server = http.createServer(async (req, res) => {
     fs.readFile(full, (err, data) => {
       if (err) return send(res, 404, 'not found', 'text/plain');
       const type = full.endsWith('.html') ? 'text/html' : full.endsWith('.js') ? 'text/javascript'
-        : full.endsWith('.css') ? 'text/css' : 'application/octet-stream';
+        : full.endsWith('.css') ? 'text/css' : full.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream';
       send(res, 200, data, type);
     });
   } catch (e) {

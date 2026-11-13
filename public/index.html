@@ -1,67 +1,101 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PermaBan — web</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <div id="app">
 
+  <!-- ── Sidebar (CrowdSec Web UI style): brand + icon pills + theme & last-cycle footer ─────── -->
+  <aside id="sidebar">
+    <div class="side-head">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 1 4.33 1 7.66-1a1 1 0 0 1 .67.01C20 4.5 22 6 22 9v4a1 1 0 0 1-1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></span>
+      <div><b class="side-title">PermaBan</b> <p class="sub" title="web edition — Node.js: a Node port of the PermaBan UI, talking to the CrowdSec Web API (REST + SSE). It runs as a scheduled task in a container and needs no Windows."><span>web edition — Node.js</span></p></div>
+    </div>
+
+    <nav class="sidenav">
+      <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>Dashboard</span></button>
+      <button data-view="candidates"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 1 4.33 1 7.66-1a1 1 0 0 1 .67.01C20 4.5 22 6 22 9v4a1 1 0 0 1-1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span>Candidates</span></button>
+      <button data-view="banned"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 12-8.5 8.5c-.963.963-2.5.963-3.46 0a2.57 2.57 0 0 1 0-3.5L12 8"/><path d="m17 14 4 4"/><path d="m8 11 4 4"/><path d="m19 6 2-2"/><path d="m4 2 2 2"/></svg><span>Banned</span></button>
+      <button data-view="activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74 3 3 0 0 1-4.2-4.2A6 6 0 0 0 8.5 15 3 3 0 0 1 9 9a4.5 4.5 0 0 1 1.7.2L14 6l-2.75-.2A1.5 1.5 0 0 0 10 4a8 8 0 0 0 .5 3 9 9 0 0 0 6.5 5"/><path d="M14 12h8v8.5"/></svg><span>Activity log</span></button>
+      <button data-view="blocklists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/><path d="M3 3.5h18l-2 2-2-2-2 2-2-2-2 2-2-2-2 2z"/><path d="m7 12 4 4 9-9"/></svg><span>Blocklists</span></button>
+      <button data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0L7.1 4.76a2 2 0 0 1-2 0L4.6 6.86a2 2 0 0 1 0 2l-.18.43a2 2 0 0 1-1.73 1H2.5a2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2h.18a2 2 0 0 1 1.73 1l.25.43a2 2 0 0 1 0 2L4.76 16.9a2 2 0 0 1 0 2l2.1 2.1a2 2 0 0 1 2 0l.43-.25a2 2 0 0 1 1.73-1H12a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0L16.9 16.9a2 2 0 0 1 2 0l2.1-2.1a2 2 0 0 1 0-2l-.25-.43a2 2 0 0 1-1.73-1H19a2 2 0 0 0 2-2v-.44a2 2 0 0 0-2-2h-.18a2 2 0 0 1-1.73-1l-4.5-3.27a2 2 0 0 1 0-2l.25-.43a2 2 0 0 1 1.73-1H20a2 2 0 0 0 2-2" transform="scale(0.9) translate(1 1)"/></svg><span>Settings</span></button>
+    </nav>
+
+    <footer class="side-foot">
+      <div id="themeCtl" class="seg3" role="radiogroup" aria-label="Theme" title="Mode clair / Système / Mode sombre — the page follows the OS in system mode.">
+        <button id="themeLight" data-theme-choice="light" role="radio" aria-checked="false" title="Mode clair"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="m19.8 22-1.8-1.8"/><path d="M2 12h2"/><path d="m3.5 3.5 1.8 1.8"/><path d="m20.5 3.5-1.8 1.8"/><path d="M22 12h-2"/><path d="m4.2 22 1.8-1.8"/></svg><span>Mode clair</span></button>
+        <button id="themeSystem" data-theme-choice="system" role="radio" aria-checked="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="8" x="5" y="2" rx="2"/><rect width="10" height="6" x="7" y="9" rx="1"/><path d="m7 19h10"/></svg><span>Système</span></button>
+        <button id="themeDark" data-theme-choice="dark" role="radio" aria-checked="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span>Mode sombre</span></button>
+      </div>
+
+      <div class="lastcard">
+        <p class="lbl">Last cycle — LAST UPDATE</p>
+        <p id="lastAt" class="mono">— (page just loaded)</p>
+      </div>
+    </footer>
+  </aside>
+
+  <!-- ── Sticky page header: dynamic view title + live controls ─────────── -->
   <header id="topbar">
-    <div class="brand"><span class="dot"></span><b>PermaBan</b> <span class="sub">web edition — Node.js</span></div>
-    <label class="switch" title="Master auto-ban switch: ON = foreign candidates are banned automatically, OFF = suggest-only. Applies instantly, no Save needed.">
-      <input type="checkbox" id="autoBanToggle" /> Auto-ban
+    <h1 id="viewTitle" class="ptitle">Dashboard</h1>
+    <span class="spacer"></span>
+    <label class="switch master" title="Master auto-ban switch: ON = foreign candidates are banned automatically, OFF = suggest-only. Applies instantly, no Save needed." for="autoBanToggle">
+      Auto-ban <input type="checkbox" id="autoBanToggle" />
     </label>
-    <span id="status" class="status">starting…</span>
-    <button id="refreshBtn" title="Run a poll cycle now">Refresh now</button>
+    <span id="status" class="status dim">starting…</span>
+    <button id="refreshBtn" class="primary" title="Run a poll cycle now">Refresh now</button>
   </header>
 
   <div id="banner" class="banner hidden"></div>
-
-  <nav id="sidebar">
-    <button data-view="dashboard" class="active">Dashboard</button>
-    <button data-view="candidates">Candidates</button>
-    <button data-view="banned">Banned</button>
-    <button data-view="activity">Activity log</button>
-    <button data-view="blocklists">Blocklists</button>
-    <button data-view="settings">Settings</button>
-  </nav>
 
   <main id="views">
 
     <!-- ── Dashboard ─────────────────────────────────────────────── -->
     <section id="view-dashboard" class="view active">
-      <div class="cards wide">
-        <div class="card"><h3>Events stored</h3><div class="big" id="statTotal">0</div>
+      <div class="kpis wide">
+        <div class="card kpi"><span class="chip sky"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg></span>
+          <p class="klab">Events stored</p><div class="big" id="statTotal">0</div>
           <div class="hint muted"><a href="/export/events.ndjson" download>Download raw history (NDJSON, full JSON of every event)</a></div></div>
-        <div class="card"><h3>Candidates</h3><div class="big" id="statCandidates">0</div></div>
-        <div class="card"><h3>Active bans</h3><div class="big" id="statBanned">0</div></div>
-        <div class="card"><h3>Auto-bans issued</h3><div class="big" id="statIssuedTotal">0</div>
+
+        <div class="card kpi"><span class="chip amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 1 4.33 1 7.66-1a1 1 0 0 1 .67.01C20 4.5 22 6 22 9v4a1 1 0 0 1-1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></span>
+          <p class="klab">Candidates</p><div class="big" id="statCandidates">0</div></div>
+
+        <div class="card kpi"><span class="chip red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 12-8.5 8.5c-.963.963-2.5.963-3.46 0a2.57 2.57 0 0 1 0-3.5L12 8"/><path d="m17 14 4 4"/><path d="m8 11 4 4"/><path d="m19 6 2-2"/><path d="m4 2 2 2"/></svg></span>
+          <p class="klab">Active bans</p><div class="big" id="statBanned">0</div></div>
+
+        <div class="card kpi"><span class="chip green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74 3 3 0 0 1-4.2-4.2A6 6 0 0 0 8.5 15 3 3 0 0 1 9 9a4.5 4.5 0 0 1 1.7.2L14 6l-2.75-.2A1.5 1.5 0 0 0 10 4a8 8 0 0 0 .5 3 9 9 0 0 0 6.5 5"/><path d="M14 12h8v8.5"/></svg></span>
+          <p class="klab">Auto-bans issued</p><div class="big" id="statIssuedTotal">0</div>
           <div class="hint muted">this cycle: <span id="statIssued">0</span></div></div>
-        <div class="card"><h3>Blocklist bans</h3><div class="big" id="statBlockTotal">0</div>
+
+        <div class="card kpi"><span class="chip sky2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/><path d="M3 3.5h18l-2 2-2-2-2 2-2-2-2 2-2-2-2 2z"/><path d="m7 12 4 4 9-9"/></svg></span>
+          <p class="klab">Blocklist bans</p><div class="big" id="statBlockTotal">0</div>
           <div class="hint muted">added <span id="statBlockAdded">0</span> · unbanned <span id="statBlockUnbanned">0</span></div></div>
       </div>
 
       <div class="charts">
         <div class="chart card">
-          <h3>Recidivism among banned IPs</h3>
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.759 6.68A9 9 0 1 0 23 13h-7z"/><circle cx="16" cy="4" r="2"/></svg>Recidivism among banned IPs</h3>
           <svg id="donut" viewBox="0 0 240 150" preserveAspectRatio="xMidYMid meet"></svg>
           <div class="legend"><span id="donutLegend"></span></div>
         </div>
 
-        <div class="chart card">
-          <h3>Events per day (last 14 days)</h3>
-          <svg id="sparkline" viewBox="0 0 560 92" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="chart card wide">
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h9"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 6h4"/><path d="M8 10h5"/><path d="M8 14h6"/></svg>Events per day (last 14 days — sqrt scale)</h3>
+          <div class="chart-body"><svg id="sparkline" viewBox="0 0 560 92" preserveAspectRatio="xMidYMid meet"></svg></div>
         </div>
 
         <div class="chart card">
-          <h3>Top scenarios (events)</h3><div id="topScenarios"></div>
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h15"/><path d="M7 12h15"/><path d="M7 20h15"/><circle cx="3.8" cy="4" r=".8"/><circle cx="3.8" cy="12" r=".8"/><circle cx="3.8" cy="20" r=".8"/></svg>Top scenarios (events)</h3><div id="topScenarios"></div>
         </div>
 
         <div class="chart card">
-          <h3>Top countries (events / banned IPs)</h3><div id="topCountries"></div>
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M5.89 7h9.6"/><path d="M5.92 17h9.4"/><path d="m7.4 19-3 3"/><path d="m10 12v8a1 1 0 0 1-1 1"/><path d="M15 4v8a1 1 0 0 1 1 1"/></svg>Top countries (events / banned IPs)</h3><div id="topCountries"></div>
         </div>
       </div>
     </section>
@@ -69,7 +103,7 @@
     <!-- ── Candidates ────────────────────────────────────────────── -->
     <section id="view-candidates" class="view">
       <div class="toolbar">
-        <input id="filterCandidates" placeholder="Filter — IP, country, verdict…" />
+        <input id="filterCandidates" placeholder="Filter — IP, country, verdict…" title="The filter matches every column as the page shows it (grouped numbers and dd/mm/yyyy dates included)." />
         <span class="spacer"></span>
         <a href="/export/candidates.csv" download>Candidates CSV</a>
         <a href="/export/candidates.json" download>Candidates JSON</a>
@@ -86,7 +120,7 @@
     <section id="view-banned" class="view">
       <div class="banner info banner-small" id="bannedBanner"></div>
       <div class="toolbar">
-        <input id="filterBanned" placeholder="Filter — IP, country, scenario, origin…" />
+        <input id="filterBanned" placeholder="Filter — IP, country, scenario, origin…" title="The filter matches every column as the page shows it (grouped numbers and dd/mm/yyyy dates included)." />
         <span class="spacer"></span>
         <a href="/export/banned.csv" download>Banned CSV</a>
         <a href="/export/banned.json" download>Banned JSON</a>
@@ -101,14 +135,17 @@
 
     <!-- ── Activity log ──────────────────────────────────────────── -->
     <section id="view-activity" class="view">
-      <div id="activityLog" class="log"></div>
+      <div class="panel card">
+        <div class="phead"><h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74 3 3 0 0 1-4.2-4.2A6 6 0 0 0 8.5 15 3 3 0 0 1 9 9a4.5 4.5 0 0 1 1.7.2L14 6l-2.75-.2A1.5 1.5 0 0 0 10 4a8 8 0 0 0 .5 3 9 9 0 0 0 6.5 5"/><path d="M14 12h8v8.5"/></svg>Activity log — notification baseline</h3><p class="pdesc">Every auto-ban and candidate alert, in order, as the app's own notification events.</p></div>
+        <div id="activityLog" class="log"></div>
+      </div>
     </section>
 
     <!-- ── Blocklists ───────────────────────────────────────────── -->
     <section id="view-blocklists" class="view">
       <div class="toolbar">
         <button id="addBlockListBtn" class="primary" title="Add one list row (URL, schedule, grace window, per-cycle cap)">+ Add list</button>
-        <button id="blockSaveBtn">Save lists</button>
+        <button id="blockSaveBtn" class="ghost">Save lists</button>
         <span id="blockMsg" class="msg"></span>
       </div>
       <table class="grid"><thead><tr>
@@ -120,76 +157,93 @@
         <th title="Cap of bans + unbans issued for THIS URL in one cycle, so a big listing lands over several cycles instead of flooding the Web UI at once. Presence bookkeeping is free; cap gates network bans/unbans only.">Per-cycle cap</th>
         <th></th>
       </tr></thead><tbody id="blockRows"></tbody></table>
-      <div class="hint muted">Bans already on the server that no list issued are never adopted, so leaving the lists never unbans a foreign decision. A failed fetch only logs: tracked state, bans and every URL's own schedule stamp survive untouched. Private ranges (RFC1918/CGNAT/link-local/multicast) and IPv6 loopback/solo/ULA/multicast are dropped by the parser.</div>
+      <div class="callout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M12 3v5"/><path d="m19 13-7 8.5"/></svg>
+        <div>Bans already on the server that no list issued are never adopted, so leaving the lists never unbans a foreign decision. A failed fetch only logs: tracked state, bans and every URL's own schedule stamp survive untouched. Private ranges (RFC1918/CGNAT/link-local/multicast) and IPv6 loopback/solo/ULA/multicast are dropped by the parser.</div>
+      </div>
     </section>
 
     <!-- ── Settings ──────────────────────────────────────────────── -->
     <section id="view-settings" class="view">
       <div class="cols">
         <div class="col">
-          <div class="card">
-            <h3>Connection</h3>
-            <label>Web UI URL<input id="fBaseUrl" /></label>
-            <label>Username<input id="fUser" /></label>
-            <label>Password<input id="fPass" type="password" autocomplete="off" /></label>
-            <label>Poll interval (s)<input id="fPoll" type="number" min="5" /></label>
-            <button id="testBtn">Test connection</button>
+          <div class="card setcard">
+            <div class="phead"><h3>Connection</h3><p class="pdesc">Where the app talks to the CrowdSec agent, and how often it polls.</p></div>
+            <div class="setbody grid2">
+              <label>Web UI URL<input id="fBaseUrl" /></label>
+              <label>Username<input id="fUser" /></label>
+              <label>Password<input id="fPass" type="password" autocomplete="off" /></label>
+              <label>Poll interval (s)<input id="fPoll" type="number" min="5" /></label>
+            </div>
+            <div class="setact"><button id="testBtn" class="ghost">Test connection</button></div>
           </div>
 
-          <div class="card">
-            <h3>Auto-ban switches</h3>
-            <label class="switch"><input type="checkbox" id="fAutoBan" /> Master auto-ban (auto-ban ↔ suggest-only)</label>
-            <label class="switch" title="Off → the safe list is absolutely protected, the threshold below is ignored. On → a safe-country attacker reaching this score is banned permanently."><input type="checkbox" id="fGate" /> Safe-country score gate</label>
-            <div class="hint" id="gateSummary"></div>
+          <div class="card setcard">
+            <div class="phead"><h3>Auto-ban switches</h3><p class="pdesc">Master switch + the safe-list gate. Both apply on Save.</p></div>
+            <div class="setbody grid2">
+              <label class="switch" title="Master auto-ban switch: ON = foreign candidates are banned automatically, OFF = suggest-only."><input type="checkbox" id="fAutoBan" /> Master auto-ban (auto-ban ↔ suggest-only)</label>
+              <label class="switch" title="Off → the safe list is absolutely protected, the threshold below is ignored. On → a safe-country attacker reaching this score is banned permanently."><input type="checkbox" id="fGate" /> Safe-country score gate</label>
+            </div>
+            <div class="setbody"><p class="hint muted" id="gateSummary"></p></div>
           </div>
 
-          <div class="card">
-            <h3>Score weights</h3>
-            <label>Event weight<input id="fEvW" type="number" step="0.1" /></label>
-            <label>Scenario weight<input id="fScW" type="number" step="0.1" /></label>
-            <label>Ban weight<input id="fBanW" type="number" step="0.1" /></label>
-            <div class="hint" id="formulaPreview"></div>
-            <div class="hint muted">Applied on Save settings. Global: they change every score, including the safe-country threshold comparison.</div>
+          <div class="card setcard">
+            <div class="phead"><h3>Score weights</h3><p class="pdesc">Global multipliers applied to every composite score, including the safe-country gate comparison.</p></div>
+            <div class="setbody grid2">
+              <label>Event weight<input id="fEvW" type="number" step="0.1" /></label>
+              <label>Scenario weight<input id="fScW" type="number" step="0.1" /></label>
+              <label>Ban weight<input id="fBanW" type="number" step="0.1" /></label>
+            </div>
+            <div class="setbody"><p class="formula mono" id="formulaPreview"></p></div>
           </div>
 
-          <div class="card">
-            <h3>App behaviour</h3>
-            <label class="switch"><input type="checkbox" id="fNotify" /> Show notifications (activity log + webhook)</label>
-            <label title="ntfy-style POST on every auto-ban / candidate alert. Leave empty for activity-log-only notifications.">Notification webhook URL<input id="fWebhook" placeholder="https://ntfy.sh/my-topic" /></label>
-            <label title="text = plain body with a Title header (ntfy style); json = {title, message}">Webhook body format<select id="fNotifyFmt"><option value="text">text</option><option value="json">JSON</option></select></label>
-            <div class="hint muted">The web edition has no tray and no Run-key startup: start it with <code>node server.js</code> (a scheduled task works fine). In a container, set the webhook at first launch with <code>PERMABAN_WEBHOOK_URL</code>.</div>
+          <div class="card setcard">
+            <div class="phead"><h3>App behaviour</h3><p class="pdesc">Notification baseline, webhook, and the runtime notes of the web edition.</p></div>
+            <div class="setbody grid2">
+              <label class="switch"><input type="checkbox" id="fNotify" /> Show notifications (activity log + webhook)</label>
+              <label title="ntfy-style POST on every auto-ban / candidate alert. Leave empty for activity-log-only notifications.">Notification webhook URL<input id="fWebhook" placeholder="https://ntfy.sh/my-topic" /></label>
+              <label title="text = plain body with a Title header (ntfy style); json = {title, message}">Webhook body format<select id="fNotifyFmt"><option value="text">text</option><option value="json">JSON</option></select></label>
+            </div>
+            <p class="hint muted" title="The web edition has no tray and no Run-key startup: start it with node server.js. In a container, set the webhook at first launch via PERMABAN_WEBHOOK_URL.">The web edition has no tray and no Run-key startup: start it with <code>node server.js</code>.</p>
+          </div>
+
+          <div class="card setcard">
+            <div class="phead"><h3>Data folder</h3><p class="pdesc">The append-only event log, ban-list snapshots and compacted state live here.</p></div>
+            <div class="setbody">
+              <p class="hint muted mono" id="dataDirLine"></p>
+              <p class="hint muted"><code>PERMABAN_DATA_DIR</code> overrides it (dev/test hook). A launch that cannot write the folder opens the history read-only — bans are issued, records stay frozen.</p>
+            </div>
           </div>
         </div>
 
         <div class="col">
-          <div class="card">
-            <h3>Safe list &amp; score gate</h3>
-            <label>Safe countries (ISO-2, comma-separated)<input id="fSafe" /></label>
-            <label title="Composite score at which a safe-country candidate is banned permanently anyway. Set something huge like 100000000 to keep the safe list absolutely protected."
-                   >Auto-ban safe countries at score ≥<input id="fScoreGate" type="number" min="0" /></label>
+          <div class="card setcard">
+            <div class="phead"><h3>Safe list &amp; score gate</h3><p class="pdesc">Countries that are never auto-banned — and the one escape hatch above the threshold.</p></div>
+            <div class="setbody grid2">
+              <label>Safe countries (ISO-2, comma-separated)<input id="fSafe" /></label>
+              <label title="Composite score at which a safe-country candidate is banned permanently anyway. Set something huge like 100000000 to keep the safe list absolutely protected."
+                     >Auto-ban safe countries at score ≥<input id="fScoreGate" type="number" min="0" /></label>
+            </div>
           </div>
 
-          <div class="card">
-            <h3>Candidate rules</h3>
-            <label>Recidivist: bans ≥<input id="fRecT" type="number" min="1" /></label>
-            <label>Aggressive: events ≥<input id="fAgEvT" type="number" min="0" /></label>
-            <label>Aggressive: scenarios ≥<input id="fAgScT" type="number" min="0" /></label>
+          <div class="card setcard">
+            <div class="phead"><h3>Candidate rules</h3><p class="pdesc">The thresholds that pick who gets banned: recidivist, aggressive (events / scenarios).</p></div>
+            <div class="setbody grid2">
+              <label>Recidivist: bans ≥<input id="fRecT" type="number" min="1" /></label>
+              <label>Aggressive: events ≥<input id="fAgEvT" type="number" min="0" /></label>
+              <label>Aggressive: scenarios ≥<input id="fAgScT" type="number" min="0" /></label>
+            </div>
           </div>
 
-          <div class="card">
-            <h3>Ban length &amp; history</h3>
-            <label title="Go ParseDuration format, no d/y. 876000h = 100 years ≈ permanent."
-                   >Permanent duration<input id="fDur" /></label>
-            <label>Reason prefix<input id="fPrefix" /></label>
-            <label>Ban scenario<input id="fScenario" /></label>
-            <label>Retention days<input id="fRet" type="number" min="1" /></label>
-          </div>
-
-
-          <div class="card">
-            <h3>Data folder</h3>
-            <div class="hint muted" id="dataDirLine"></div>
-            <div class="hint muted"><code>PERMABAN_DATA_DIR</code> overrides it (dev/test hook). A launch that cannot write the folder opens the history read-only — bans are issued, records stay frozen.</div>
+          <div class="card setcard">
+            <div class="phead"><h3>Ban length &amp; history</h3><p class="pdesc">How long a ban lasts, the reason prefix it carries, and how much history is kept.</p></div>
+            <div class="setbody grid2">
+              <label title="Go ParseDuration format, no d/y. 876000h = 100 years ≈ permanent."
+                     >Permanent duration<input id="fDur" /></label>
+              <label>Reason prefix<input id="fPrefix" /></label>
+              <label>Ban scenario<input id="fScenario" /></label>
+              <label>Retention days<input id="fRet" type="number" min="1" /></label>
+            </div>
           </div>
         </div>
       </div>
@@ -206,9 +260,9 @@
 <!-- ── per-IP profile: the full raw JSON stored for that IP ─────────── -->
 <div id="profileModal" class="modal hidden">
   <div class="sheet card">
-    <h3>IP profile — <span id="profileTitle"></span><button id="closeProfile" class="mini closebtn">Close</button></h3>
-    <div class="hint" id="profileSummary"></div>
-    <pre id="profileRaw"></pre>
+    <h3><span>IP profile — <span id="profileTitle"></span></span><button id="closeProfile" class="mini closebtn">Close</button></h3>
+    <p class="hint muted" id="profileSummary"></p>
+    <pre id="profileRaw" class="mono"></pre>
   </div>
 </div>
 

@@ -109,6 +109,17 @@ Env seeds are first-run only and map onto the **first row** of `settings.blockli
 
 Six views fed by a Server-Sent-Events stream (`/events`), so charts, verdicts and rows update without reload (sidebar order: Dashboard, Candidates, Banned, Activity, **Blocklists**, Settings):
 
+The shell is deliberately in the style of the CrowdSec Web UI itself (fixed icon+label sidebar pills with an active tinted state, sticky
+page header carrying the title of the active view, rounded bordered cards on sky-500/sky-600 tokens, uppercase-style table headers, pill badges):
+
+- **Sidebar** — brand block + one lucide SVG icon per nav item; footer carries a three-way segmented radiogroup (`role=radiogroup`,
+  sun / monitor / moon: Mode clair / Système / Mode sombre) persisted in `localStorage` and applied on load, plus the mono "LAST CYCLE — LAST UPDATE" card.
+- **Header** — page title follows the active view (Dashboard → Candidates → Banned IP → …), master auto-ban pill switch, status pill, primary sky Refresh button.
+- **Palette** — `[data-theme="light"]` and `[data-theme="dark"]` CSS variable blocks: gray-50 page + white cards vs deep navy page (`#020617`) + slate surfaces
+  (`#18212e` sidebar, `#1b2635` cards), sky primary tokens (primary = `#0ea5e9`/`#0284c7`); KPI cards carry centered rounded tinted icon chips (sky / amber / red / green),
+  settings cards get the reference header strip (`phead h3` + `.pdesc`, body grid, pill switches) and a sticky Save bar; table wrappers are rounded bordered panels with
+  uppercase-style ths and pill verdict badges. The nav loop wires only `[data-view]` pills (the theme footer has `data-theme-choice`), so switching the mode never closes the open view.
+
 - **Dashboard** — five cards: events stored, candidates, active bans, **auto-bans issued by the app over its lifetime**
   (this cycle's number underneath), and **blocklist bans** — how many IPs all enabled imported rows own right now, with added /
   unbanned this cycle under it. Both counters come from what is persisted in `state.json` and carried by `/api/state`,
@@ -236,7 +247,7 @@ core/source.js  →  core/store.js  →  core/scoring.js  →  core/rules.js  �
 ## Tests
 
 ```powershell
-node --test tests/        # 91 offline tests — no real server, no network beyond localhost; every imported-list fixture uses an injectable per-URL fetcher
+node --test tests/        # 92 offline tests — no real server, no network beyond localhost; every imported-list fixture uses an injectable per-URL fetcher
 ```
 
 rules **11**, scoring **7** (candidate flags included), store **22** (read-only mode, scratch fallback, compaction,

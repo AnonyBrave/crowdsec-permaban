@@ -247,6 +247,33 @@ test('Ui_BarTrackWidthsKeepRelativeScale', async () => {
   }
 });
 
+// Theme & header chrome, the CrowdSec Web UI pattern the page copies: a sidebar theme radiogroup (light / system / dark)
+// applied on load + persisted, an icon pill per view, and the sticky header title following the active view. The pairing test above
+// already proves the ids app.js touches exist — these checks prove the wiring itself.
+test('Ui_ThemeSwitchAndHeaderTitleWired', () => {
+  const radios = [...html.matchAll(/<button id="(themeLight|themeSystem|themeDark)" data-theme-choice="([^"]+)"/g)];
+  assert.deepEqual(radios.map((m) => [m[1], m[2]]), [['themeLight', 'light'], ['themeSystem', 'system'], ['themeDark', 'dark']],
+    'the sidebar footer must carry the three theme choices, in order');
+
+  // app.js reads localStorage, applies data-theme on load and wires all three buttons — no browser needed to prove it.
+  assert.ok(appjs.includes("'permaban.theme'"), 'no persisted key for the stored theme choice');
+  assert.ok(/applyTheme\(savedTheme\)/.test(appjs), 'the page never applies the stored theme on load');
+  assert.ok(/\['themeLight', 'themeSystem', 'themeDark'\]\)\s*\$\(id\)\.addEventListener/.test(appjs), 'the three theme buttons are not wired to chooseTheme');
+
+  // Each sidebar pill carries its icon (svg) — exactly the reference nav item pattern: icon + label, icons wired to views.
+  const views = [...html.matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
+  const pills = [...html.matchAll(/<button data-view="([^"]+)"[^>]*>(?:\s*<span>)?/g)].map((m) => m[1]);
+  for (const v of views) {
+    const block = html.slice(html.indexOf(`data-view="${v}"`), html.indexOf('</button>', html.indexOf(`data-view="${v}"`)));
+    assert.ok(block.includes('<svg'), `nav pill "${v}" has no icon svg`);
+  }
+
+  // Header title mapping + the stamping of "last cycle" into the sidebar footer card.
+  for (const v of views) assert.ok(appjs.includes(`${v}:`), `VIEW_TITLE has no entry for ${v}`);
+  assert.ok(/\$\('viewTitle'\)\.textContent\s*=\s*VIEW_TITLE\[b\.dataset\.view\]/.test(appjs), 'the header title does not follow the active view');
+  assert.ok(/const lat = \$\('lastAt'\)[\s\S]{0,45}lat\.textContent\s*=\s*fmtTs\(c\.at\)/.test(appjs), 'the sidebar footer never stamps the cycle time');
+});
+
 // The page-load bug the user reported: opening the dashboard showed no graph and no numbers until "Refresh now" was
 // clicked. Static proof that a fresh load can paint on its own — `/api/state` answers with the last snapshot, `loadState`
 // draws it, and SSE `hello` carries the same snapshot for a tab opened between two polls (or a reconnect).

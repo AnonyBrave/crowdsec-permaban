@@ -98,15 +98,49 @@ function collectBlocklists() {
   return live.map(cleanBlockRow).filter((r) => r.url);
 }
 
-// ── views ────────────────────────────────────────────────────────────
-for (const b of document.querySelectorAll('#sidebar button')) {
+// ── views: active pill + the sticky header's page title, as in the CrowdSec Web UI top bar ───────
+const VIEW_TITLE = { dashboard:'Dashboard', candidates:'Candidates', banned:'Banned IPs', activity:'Activity log', blocklists:'Blocklists', settings:'Settings' };
+
+// The nav pills switch the visible view; the footer theme buttons carry `data-theme-choice`, not `data-view`, so this loop
+// touches only the six page buttons — a click on "Mode clair" must never strip `.active` from the open section.
+for (const b of document.querySelectorAll('#sidebar button[data-view]')) {
   b.addEventListener('click', () => {
-    for (const x of document.querySelectorAll('#sidebar button')) x.classList.remove('active');
+    for (const x of document.querySelectorAll('#sidebar button')) {
+      x.classList.remove('active');
+      if (x.removeAttribute) x.removeAttribute('aria-current');   // active pill state, one page at a time.
+    }
     b.classList.add('active');
+    if (b.setAttribute) b.setAttribute('aria-current', 'page');
     for (const v of document.querySelectorAll('.view')) v.classList.remove('active');
     $(`view-${b.dataset.view}`).classList.add('active');
+    $('viewTitle').textContent = VIEW_TITLE[b.dataset.view] ?? 'Dashboard';   // the header title follows the active view.
   });
 }
+
+// ── theme switcher: Mode clair / Système / Mode sombre, persisted in localStorage; applied on load ───────
+const THEME_KEY = 'permaban.theme';
+function applyTheme(mode) {   // mode light|system|dark; "system" follows the OS. Guarded for headless shims (no <html> node).
+  const root = document.documentElement; if (!root || !root.setAttribute) return;
+  const dark = mode === 'dark' || (mode === 'system' && typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches);
+  root.setAttribute('data-theme', dark ? 'dark' : 'light');   // the light/dark token blocks in style.css do the rest.
+}
+function paintThemeCtl(mode) {   // active segment = aria-checked + .on, as the reference segmented radiogroup does it.
+  for (const id of ['themeLight', 'themeSystem', 'themeDark']) {
+    const b = $(id); if (!b || !b.dataset) continue;
+    const on = b.dataset.themeChoice === mode;
+    if (b.setAttribute) b.setAttribute('aria-checked', String(on));
+    b.classList.remove('on'); if (on && b.classList.add) b.classList.add('on');   // shim classList is add/remove only.
+  }
+}
+function chooseTheme(mode) {
+  try { localStorage.setItem(THEME_KEY, mode); } catch {}   // a browser persists it; shims keep running on the choice alone.
+  applyTheme(mode); paintThemeCtl(mode);
+}
+for (const id of ['themeLight', 'themeSystem', 'themeDark']) $(id).addEventListener('click', () => chooseTheme($(id).dataset.themeChoice));
+
+let savedTheme = 'system';   // stored choice, applied on load: a fresh page opens exactly where the user left it.
+try { if (typeof localStorage !== 'undefined') savedTheme = localStorage.getItem(THEME_KEY) || 'system'; } catch {}
+applyTheme(savedTheme); paintThemeCtl(savedTheme);
 
 // ── state + stream ───────────────────────────────────────────────────
 async function loadState() {
@@ -230,6 +264,7 @@ function renderCycle(c) {
   $('bannedBanner').textContent = `${c.banned.length} active ban decision(s); ${new Set(c.banned.map((b) => b.ip)).size} unique IP(s).`;
 
   renderActivity(lastActivity);
+  const lat = $('lastAt'); if (lat && c.at) lat.textContent = fmtTs(c.at);   // sidebar footer: the cycle this page is showing.
 }
 
 function setStatus(connected) {
