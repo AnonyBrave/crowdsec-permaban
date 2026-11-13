@@ -99,6 +99,33 @@ test('Ui_ExportLinksMatchTheServerRoutes', () => {
   assert.ok(html.includes('id="profileModal"') && html.includes('id="closeProfile"'));
 });
 
+// Page strips under each grid (the reference UI's pagination row): the static pairing must hold — a pager host id app.js paints lives in
+// index.html right after its table, and delegation is wired from that host (`data-page-prev` / `data-page-next`, `data-pagesize` select).
+test('Ui_GridPaginationWired', () => {
+  const grids = [...html.matchAll(/(candidatesGrid|bannedGrid)/g)].map((m) => m[1]);
+  assert.ok(html.includes('<div class="pager" id="candidatePager">') && html.includes('<div class="pager" id="bannedPager">'),
+    'both grids need a static pager host');
+  for (const g of grids) {
+    const open = html.indexOf(`<table id="${g}"`);
+    assert.ok(open >= 0, `${g} is not in the page`);
+    const section = html.slice(open, html.indexOf('</section>', open));
+    const hostId = g === 'candidatesGrid' ? 'candidatePager' : 'bannedPager';
+    assert.ok(section.includes(`id="${hostId}"`), `${hostId} pager is not inside the ${g} view`);
+  }
+
+  assert.match(appjs, /data-page-prev[^]*data-page-next/, 'the painted pager strip must carry prev/next buttons');
+  assert.match(appjs, /<select data-pagesize>/, 'the painted strip needs its page-size select');
+  assert.ok(/host\.addEventListener\('click'/.test(appjs) && /host\.addEventListener\('change'/.test(appjs),
+    'pager hosts must be wired by delegation from the host itself');
+  assert.match(appjs, /grids\[name\]\.page = 0;[^]*renderGrid\(name\)/, 'typing a new filter restarts at page 1');
+
+  const css = read(path.join(PUBLIC, 'style.css'));
+  assert.ok(/\.pager\s*\{/.test(css), 'no .pager rule for the page strip under each grid');
+
+  // The exported helpers drive pages in `tests/grid.test.js` (no DOM): sorting + filtering stay over the whole list, one slice paints.
+  assert.match(appjs, /export \{[^}]*setPage[^}]*setPerPage/, 'pagination helpers must be exported for offline driving');
+});
+
 // app.js loads as an ES module, so every relative import must be a real file the static UI serves.
 test('Ui_AppImportsResolveToRealServedFiles', async () => {   // async: it executes the chart module to prove the strip
   const specifiers = [...appjs.matchAll(/from\s*'(\.[^']+)'/g)].map((m) => m[1]);

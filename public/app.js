@@ -187,20 +187,50 @@ $('autoBanToggle').addEventListener('change', async () => {
 // ── grids: one sort key + filter text each. Defaults match the server's own order.
 // `keys` is one field per row: `_s`, the searchable text built by searchRow() below — every column the grid shows,
 // exactly as the page renders it (grouped numbers and `dd/mm/yyyy, hh:mm:ss` dates included), so typing what you can see matches.
+// Pagination mirrors the reference UI's tables: sorting and filtering run over the whole list; only one page of rows reaches
+// the DOM — a Banned grid with 60k decisions is unusable when every row lands in `innerHTML`, and a page-size select + prev/next
+// under each table keeps painting fast. The pager strip lives in the static host ids below, painted as markup by paintPager()
+// and wired by delegation from the host itself (`data-page-prev` / `data-page-next` buttons, `data-pagesize` select).
+const PAGE_SIZES = [1, 10, 25, 50, 100, 250];
 const grids = {
-  candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['_s'] },
-  bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['_s'] },
+  candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['_s'], page: 0, perPage: 25, pager: 'candidatePager' },
+  bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['_s'], page: 0, perPage: 25, pager: 'bannedPager' },
 };
 
-// Filter first (cheap), then sort the surviving rows — `sortRows` is stable, so ties keep the server's ranking.
+// Filter first (cheap), then sort the surviving rows — `sortRows` is stable, so ties keep the server's ranking. Only the active
+// page of that sorted order is turned into row markup; a filter typed in the box lands on page 1 with the same rule.
 function renderGrid(name) {
   const g = grids[name];
   const visible = sortRows(filterRows(g.rows, g.text, g.keys), g.key, g.dir);
-  $(g.body).innerHTML = visible.map((x) => name === 'candidatesGrid' ? rowCandidate(x) : rowBanned(x)).join('');
+  const total = visible.length;
+  const pages = Math.max(1, Math.ceil(total / g.perPage));
+  if (g.page >= pages) g.page = pages - 1;
+  const start = g.page * g.perPage;
+  $(g.body).innerHTML = visible.slice(start, start + g.perPage).map((x) => name === 'candidatesGrid' ? rowCandidate(x) : rowBanned(x)).join('');
   for (const th of document.querySelectorAll(`#${name} th[data-key]`))
     th.querySelector('.ind').textContent = th.dataset.key === g.key ? (g.dir < 0 ? ' ▼' : ' ▲') : '';
+  paintPager(name, total);   // range label + prev/next + page-size select as markup.
   wireButtons();
 }
+
+function pagerMarkup(g, total) {
+  const pages = Math.max(1, Math.ceil(total / g.perPage));
+  const from = total ? g.page * g.perPage + 1 : 0;
+  const to = Math.min(total, g.page * g.perPage + g.perPage);
+  const sizeSel = `<select data-pagesize>${PAGE_SIZES.map((n) => `<option value="${n}"${n === g.perPage ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+  return `<span class="pg-lbl">Rows per page</span>${sizeSel}` +
+    `<button data-page-prev title="Previous page"${g.page === 0 ? ' disabled' : ''}>←</button>` +
+    `<span class="pg-range">${from}–${to} sur ${total}</span>` +
+    `<button data-page-next title="Next page"${g.page >= pages - 1 ? ' disabled' : ''}>→</button>` +
+    `<span class="pg-page">page ${g.page + 1} / ${pages}</span>`;
+}
+
+function paintPager(name, total) { $(grids[name].pager).innerHTML = pagerMarkup(grids[name], total); }
+
+// Delegation from the static host: page buttons carry `data-page-prev` / `data-page-next`, the size select `data-pagesize`.
+// A click on a host re-paints only that grid's row slice, so prev/next stays instant whatever the store size.
+function setPage(name, p) { const g = grids[name]; g.page = Math.max(0, p); renderGrid(name); }
+function setPerPage(name, n) { const g = grids[name]; if (PAGE_SIZES.includes(n)) { g.perPage = n; g.page = 0; } renderGrid(name); }
 
 for (const name of Object.keys(grids)) {
   for (const th of document.querySelectorAll(`#${name} th[data-key]`)) {
@@ -216,7 +246,19 @@ for (const name of Object.keys(grids)) {
 
   $(grids[name].filter).addEventListener('input', () => {
     grids[name].text = $(grids[name].filter).value;
+    grids[name].page = 0;   // a new filter starts at the top of its sorted order, not on page 3.
     renderGrid(name);
+  });
+
+  const host = $(grids[name].pager);
+  host.addEventListener('click', (e) => {
+    const b = e.target ?? {};
+    if (b.dataset && b.dataset.pagePrev) setPage(name, grids[name].page - 1);
+    if (b.dataset && b.dataset.pageNext) setPage(name, grids[name].page + 1);
+  });
+  host.addEventListener('change', (e) => {
+    const s = e.target ?? {};
+    if (s.dataset && s.dataset.pagesize) setPerPage(name, Number(s.value));
   });
 }
 
@@ -519,4 +561,4 @@ loadState();
 // and now the dedicated Blocklists tab rows (+ Add list / collect). `loadState` is exported too: a fresh page must paint from `/api/state` alone (no SSE frame,
 // no "Refresh now" click) — including fillSettingsForm painting the working rows from `/api/state` settings.
 // The page itself loads app.js as an ES module and ignores these; zero dependencies stay.
-export { renderCycle, guard, loadState, searchCandidate, searchBanned, fillSettingsForm, collectBlocklists, addBlockList, renderBlockRows };
+export { renderCycle, guard, loadState, searchCandidate, searchBanned, fillSettingsForm, collectBlocklists, addBlockList, renderBlockRows, setPage, setPerPage };

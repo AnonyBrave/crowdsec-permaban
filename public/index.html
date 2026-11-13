@@ -114,6 +114,7 @@
         <th data-key="banCount" data-numeric>Bans</th><th data-key="firstSeen">First seen</th><th data-key="lastSeen">Last seen</th>
         <th data-key="reason">Verdict</th><th></th>
       </tr></thead><tbody id="candidateRows"></tbody></table>
+      <div class="pager" id="candidatePager"></div>   <!-- painted by paintPager(): rows-per-page select, prev/next, "x–y sur N", page counter -->
     </section>
 
     <!-- ── Banned ────────────────────────────────────────────────── -->
@@ -131,6 +132,7 @@
         <th data-key="score" data-numeric>Score</th><th data-key="createdAt">Created</th><th data-key="expiresAt">Expires</th>
         <th data-key="autoBannedByApp">By app</th><th></th>
       </tr></thead><tbody id="bannedRows"></tbody></table>
+      <div class="pager" id="bannedPager"></div>   <!-- painted by paintPager(): rows-per-page select, prev/next, "x–y sur N", page counter -->
     </section>
 
     <!-- ── Activity log ──────────────────────────────────────────── -->

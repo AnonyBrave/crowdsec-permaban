@@ -323,6 +323,47 @@ test('Grid_FilterAndSortCombine', () => {
     'Candidates: a text column sorts the filtered rows low-first');
 });
 
+// The pager strip is part of the grid state: sorting and filtering run over the whole list, only one page of rows reaches `innerHTML`
+// (a store with 60k Banned decisions must paint instantly), prev/next re-paints that slice alone, a new filter lands on page 1,
+// and the range label + disabled edge buttons come from the same state object. Small fixtures need a one-row page: walk pages under
+// stable sort orders — the raw snapshot fields plus the page's own displayed form drive expectations.
+test('Grid_PaginationPaintsOnePageAndNavigates', () => {
+  app.renderCycle(snapshot());                     // grids state is shared across this file: drive createdAt desc through the header helper, then page over its order
+  click('bannedGrid', 'createdAt');                // new text column starts low-first…
+  click('bannedGrid', 'createdAt');                // …and a second click flips to newest-first (the mirror in `sortState` tracks app.js state exactly)
+  const created = expectOrder(BANNED, 'createdAt', -1);   // createdAt desc: [8.8.8.8, 10.0.0.9, 198.51.100.7]
+
+  app.setPerPage('bannedGrid', 1);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'the active page shows exactly `perPage` sorted rows');
+
+  let html = els.bannedPager.innerHTML;
+  assert.ok(/<span class="pg-range">1–1 sur 3<\/span>/.test(html), `page-1 range label: ${html}`);
+  assert.ok(/data-page-prev[^>]*disabled/.test(html) && /data-page-next/.test(html) && !/data-page-next[^>]*disabled/.test(html),
+    'on page 1 prev is disabled and next is enabled');
+
+  app.setPage('bannedGrid', 1);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(1, 2)), 'next page paints the following row of the sorted order');
+
+  app.setPage('bannedGrid', 2);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(2, 3)), 'the last page paints the tail of the order');
+  html = els.bannedPager.innerHTML;
+  assert.ok(/<span class="pg-range">3–3 sur 3<\/span>/.test(html) && /data-page-next[^>]*disabled/.test(html), 'last page: range and disabled next');
+
+  app.setPage('bannedGrid', 0);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'going back repaints the same slice under the active sort');
+
+  click('bannedGrid', 'score');                    // numeric high-first: [10.0.0.9 (5599), 198.51.100.7 (1240), 8.8.8.8 (1000)], page state untouched
+  const byScore = expectOrder(BANNED, 'score', -1);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(byScore.slice(0, 1)), 'sorting repaints the same page under its new order');
+
+  type('bannedGrid', 'cscli');                     // one row survives — a new filter lands on page 1 of that order
+  const cscli = byScore.filter((ip) => BANNED.find((r) => r.ip === ip).origin === 'cscli');
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(cscli), 'filtered rows show from page 1 (one row, so the range reads 1–1 sur 1)');
+
+  type('bannedGrid', '');                          // cleared filter: full order back, page size and sort untouched
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(byScore.slice(0, 1)), 'a cleared filter restarts at page 1 of the full order');
+});
+
 // The dashboard cards and the Settings form fill from what the server sends — not from this cycle's activity counters.
 // A page opened between two polls sees the persisted lifetime count, aggregate tracked/added/unbanned cards, and the saved dedicated-tab
 // rows; reloads never blank them out. `addBlockList()` is exercised through its export — no browser, no createElement in this shim.

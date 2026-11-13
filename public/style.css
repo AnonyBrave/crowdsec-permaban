@@ -147,6 +147,11 @@ html[data-theme="light"] .chip.sky{background:#e0f2fe;color:#0369a1} html[data-t
 
 /* ── grids: rounded bordered panel w/ uppercase ths + pill verdict/tags (reference table) ─── */
 table.grid { width:100%; border-collapse:separate; border-spacing:0; background:var(--card); border:1px solid var(--line); border-radius:.5rem; box-shadow:var(--shadow); overflow:hidden;}
+/* Page strip under each grid (the reference UI's pagination row): one page of rows reaches the DOM, so a Banned list of 60k decisions stays responsive. */
+.pager { display:flex; align-items:center; gap:10px; margin-top:12px; padding:9px 14px; background:var(--card); border:1px solid var(--line); border-radius:.5rem; font-size:13px;}
+.pager button { min-width:34px; padding:7px 10px; border-radius:.4rem; background:var(--soft); color:var(--text); border:1px solid var(--line); cursor:pointer; }
+.pager button:hover:not(:disabled) { color:var(--accent); border-color:rgba(2,132,197,.4);} .pager button:disabled{opacity:.45;cursor:default}
+.pager select{ width:auto; padding:6px 8px;} .pg-lbl{color:var(--muted)} .pg-range{font-family:var(--font-mono); color:var(--text)} .pg-page{margin-left:auto;color:var(--muted)}
 table.grid thead{ background:var(--soft);} 
 table.grid th { padding:12px 24px; text-align:left; font-size:12.5px; font-weight:600; color:var(--muted); text-transform:none; white-space:nowrap; cursor:pointer;}
 table.grid td { padding:13px 24px; border-top:1px solid var(--line); font-size:13.5px; vertical-align:middle; }

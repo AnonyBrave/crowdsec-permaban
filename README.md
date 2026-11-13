@@ -143,6 +143,9 @@ page header carrying the title of the active view, rounded bordered cards on sky
 - **Banned** — every active decision joined with the IP's stored profile (events, bans, score), best-known country,
   scenario, origin (`crowdsec` / `cscli` / …), created/expires, `by app` tag, one-click **Unban**. Same sortable headers
   and filter box: ip, country, scenario, origin, events, bans, score, created, expires, the tag — all matchable.
+- **Grid pages** — each grid paints one page of rows at a time (page-size select `1 / 10 / 25 / 50 / 100 / 250`, default 25) with prev/next buttons and an `x–y sur N` range under the
+  table. Sorting and filtering run over the whole list, so a store of 60k decisions stays responsive; typing a new filter lands on page 1 of the active order (proven by
+  `Grid_PaginationPaintsOnePageAndNavigates`, where prev/next re-paints that slice alone).
 - **Per-IP viewer** — clicking any IP cell in Candidates or Banned opens a profile modal: score + events/scenarios/bans,
   ban state, and every stored event for that IP with its **full raw JSON** as received from the Web UI API.
 - **Export links** — one-click downloads of exactly what the grids show: `candidates.csv` / `banned.csv`,
@@ -247,7 +250,7 @@ core/source.js  →  core/store.js  →  core/scoring.js  →  core/rules.js  �
 ## Tests
 
 ```powershell
-node --test tests/        # 92 offline tests — no real server, no network beyond localhost; every imported-list fixture uses an injectable per-URL fetcher
+node --test tests/        # 94 offline tests — no real server, no network beyond localhost; every imported-list fixture uses an injectable per-URL fetcher
 ```
 
 rules **11**, scoring **7** (candidate flags included), store **22** (read-only mode, scratch fallback, compaction,
