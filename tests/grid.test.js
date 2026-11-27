@@ -152,7 +152,7 @@ const expectOrder = (rows, key, dir) => rows.slice().sort((a, b) => {
 const GRID = { candidatesGrid: { body: 'candidateRows', input: 'filterCandidates', raw: CAND, headers: headerList('candidatesGrid') },
                bannedGrid: { body: 'bannedRows', input: 'filterBanned', raw: BANNED, headers: headerList('bannedGrid') } };
 
-const rowCells = (html) => [...html.matchAll(/<tr>\s*([\s\S]*?)<\/tr>/g)].map((m) =>
+const rowCells = (html) => [...html.matchAll(/<tr(?:\s[^>]*)?>\s*([\s\S]*?)<\/tr>/g)].map((m) =>
   [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => c[1]));
 const shownIps = (html) => rowCells(html).map((r) => /data-profile="([^"]+)"/.exec(r[0] ?? '')?.[1] ?? null);
 
@@ -323,58 +323,80 @@ test('Grid_FilterAndSortCombine', () => {
     'Candidates: a text column sorts the filtered rows low-first');
 });
 
-// The pager strip is part of the grid state: sorting and filtering run over the whole list, only one page of rows reaches `innerHTML`
-// (a store with 60k Banned decisions must paint instantly), prev/next re-paints that slice alone, a new filter lands on page 1,
-// and the range label + disabled edge buttons come from the same state object. Small fixtures need a one-row page: walk pages under
-// stable sort orders — the raw snapshot fields plus the page's own displayed form drive expectations.
-test('Grid_PaginationPaintsOnePageAndNavigates', () => {
-  app.renderCycle(snapshot());                     // grids state is shared across this file: drive createdAt desc through the header helper, then page over its order
-  click('bannedGrid', 'createdAt');                // new text column starts low-first…
-  click('bannedGrid', 'createdAt');                // …and a second click flips to newest-first (the mirror in `sortState` tracks app.js state exactly)
+// The window strip is part of the grid state: sorting and filtering run over the whole list, only the loaded window reaches
+// `innerHTML` (a store with 60k Banned decisions must paint instantly), a scroll appends the next batch as fade-in rows, a
+// filter / header click / new cycle restarts the window at the top of its order, and the range label + disabled Load-more
+// button come from the same state object. Small fixtures need one-row batches: walk the window under stable sort orders —
+// the raw snapshot fields plus the page's own displayed form drive expectations.
+test('Grid_ScrollWindowAppendsBatchesAndFades', () => {
+  app.renderCycle(snapshot());   // grids state is shared across this file: batch 25, 3 rows total → the whole window is painted
+  let html = els.bannedPager.innerHTML;
+  assert.ok(/<span class="pg-range">Loaded 1–3 sur 3<\/span>/.test(html) && /data-loadmore[^>]*disabled/.test(html) && /all loaded/.test(html),
+    `a grid smaller than one batch loads fully at once: ${html}`);
+
+  click('bannedGrid', 'createdAt');   // new text column starts low-first…
+  click('bannedGrid', 'createdAt');   // …and a second click flips to newest-first (the mirror in `sortState` tracks app.js state exactly)
   const created = expectOrder(BANNED, 'createdAt', -1);   // createdAt desc: [8.8.8.8, 10.0.0.9, 198.51.100.7]
 
-  app.setPerPage('bannedGrid', 1);
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'the active page shows exactly `perPage` sorted rows');
-
-  let html = els.bannedPager.innerHTML;
-  assert.ok(/<span class="pg-range">1–1 sur 3<\/span>/.test(html), `page-1 range label: ${html}`);
-  assert.ok(/data-page-prev[^>]*disabled/.test(html) && /data-page-next/.test(html) && !/data-page-next[^>]*disabled/.test(html),
-    'on page 1 prev is disabled and next is enabled');
-
-  app.setPage('bannedGrid', 1);
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(1, 2)), 'next page paints the following row of the sorted order');
-
-  app.setPage('bannedGrid', 2);
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(2, 3)), 'the last page paints the tail of the order');
+  app.setBatch('bannedGrid', 1);   // 1 is a real PAGE_SIZES value → the window restarts at the top of the order
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'the window opens at the first batch of the sorted order');
   html = els.bannedPager.innerHTML;
-  assert.ok(/<span class="pg-range">3–3 sur 3<\/span>/.test(html) && /data-page-next[^>]*disabled/.test(html), 'last page: range and disabled next');
+  assert.ok(/<span class="pg-range">Loaded 1–1 sur 3<\/span>/.test(html) && /data-loadmore/.test(html) && !/data-loadmore[^>]*disabled/.test(html),
+    `batch 1: range + enabled Load more: ${html}`);
 
-  app.setPage('bannedGrid', 0);
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'going back repaints the same slice under the active sort');
+  assert.ok(app.appendBatch('bannedGrid'), 'the sentinel appends the next batch');
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 2)), 'the appended batch extends the window in sorted order');
+  assert.ok(els.bannedRows.innerHTML.includes('<tr class="in" style="animation-delay:0ms">'),
+    'a row arriving on a scroll carries the .in fade-in class with its stagger delay');
 
-  // The painted buttons are valueless presence attributes (`data-page-prev` — dataset entry is `''`, falsy), so prev/next and the page-size
-  // select must be recognized by membership in `dataset`. Drive the host's real delegation handlers with synthetic events: this is exactly
-  // what a browser delivers when it dispatches from `innerHTML` markup into the static pager host.
-  els.bannedPager.listeners.click({ target: { dataset: { pageNext: '' } } });   // presence marker, empty string value — falsy in JS
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(1, 2)), 'the host\'s click delegation moves to the next row slice');
+  app.appendBatch('bannedGrid');   // tail of the order lands, window holds every row
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created), 'the window grows to the whole sorted order');
+  html = els.bannedPager.innerHTML;
+  assert.ok(/<span class="pg-range">Loaded 1–3 sur 3<\/span>/.test(html) && /data-loadmore[^>]*disabled/.test(html) && /all loaded/.test(html),
+    'full window: range, disabled Load more, "all loaded"');
+  assert.ok(app.appendBatch('bannedGrid') === false, 'appending past the end is a no-op, not a crash');
 
-  els.bannedPager.listeners.click({ target: { dataset: { pagePrev: '' } } });
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created.slice(0, 1)), 'prev delegation moves back and repaints that slice alone');
-
-  const sel = { dataset: { pagesize: '' }, value: '1' };   // same presence rule for the painted select
+  // The painted button is a valueless presence attribute (`data-loadmore` — dataset entry is `''`, falsy), so Load-more and the
+  // batch-size select must be recognized by membership in `dataset`. Drive the host's real delegation handlers with synthetic
+  // events: this is exactly what a browser delivers when it dispatches from `innerHTML` markup into the static pager host.
+  const sel = { dataset: { pagesize: '' }, value: '10' };   // 10 is in PAGE_SIZES; the delegation must read the select's own value
   els.bannedPager.listeners.change({ target: sel });
-  assert.ok(/<span class="pg-range">1–1 sur 3<\/span>/.test(els.bannedPager.innerHTML), 'a delegated page-size change repaints the strip (delegation sees `in`, not truthiness)');
+  html = els.bannedPager.innerHTML;
+  assert.ok(/<option value="10" selected>10<\/option>/.test(html) && /<span class="pg-range">Loaded 1–3 sur 3<\/span>/.test(html) && /all loaded/.test(html),
+    `delegated batch-size change restarts the window (delegation sees \`in\`, not truthiness): ${html}`);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(created), 'the window restarts with the bigger batch (3 rows ≤ 10)');
 
-  click('bannedGrid', 'score');                    // numeric high-first: [10.0.0.9 (5599), 198.51.100.7 (1240), 8.8.8.8 (1000)], page state untouched
-  const byScore = expectOrder(BANNED, 'score', -1);
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(byScore.slice(0, 1)), 'sorting repaints the same page under its new order');
+  // 12 rows under a batch of 10: the delegated Load-more appends the tail as staggered fade-in rows.
+  const BIG = snapshot();
+  BIG.banned = BANNED.concat([1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => ({
+    id: 100 + i, ip: `10.0.0.${i}`, scenario: 'blocklist/permaban', country: 'US',
+    origin: i % 3 === 1 ? 'cscli' : 'coordinator', createdAt: '2026-11-10T08:00:00.000Z', expiresAt: '2126-11-10T08:00:00.000Z',
+    autoBannedByApp: false, events: 10 * i, bans: i, score: 100 * i,
+  })));
+  app.renderCycle(BIG);   // batch 10 → the window opens at 10 plain rows of the createdAt-desc order
+  assert.equal(shown('bannedGrid').length, 10, 'a new cycle restarts the window at the batch size');
+  assert.ok(!/<tr class="in"/.test(els.bannedRows.innerHTML), 'the rows painted when the window opens are plain, not fade-in');
 
-  type('bannedGrid', 'cscli');                     // one row survives — a new filter lands on page 1 of that order
-  const cscli = byScore.filter((ip) => BANNED.find((r) => r.ip === ip).origin === 'cscli');
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(cscli), 'filtered rows show from page 1 (one row, so the range reads 1–1 sur 1)');
+  els.bannedPager.listeners.click({ target: { dataset: { loadmore: '' } } });   // presence marker, empty string value — falsy in JS
+  assert.equal(shown('bannedGrid').length, 12, 'the host\'s click delegation appends the tail as fade-in rows');
+  const delays = els.bannedRows.innerHTML.match(/animation-delay:\d+ms/g);
+  assert.deepEqual(delays, ['animation-delay:0ms', 'animation-delay:30ms'],   // createdAt desc tail = the 2 BANNED rows after the 9 same-day extras
+    `the appended tail staggers its fade-in top-down: ${delays}`);
 
-  type('bannedGrid', '');                          // cleared filter: full order back, page size and sort untouched
-  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(byScore.slice(0, 1)), 'a cleared filter restarts at page 1 of the full order');
+  click('bannedGrid', 'score');    // numeric high-first: 5599, 1240, 1000, 900, …, 100 — the window restarts at the top
+  const byScore = expectOrder(BIG.banned, 'score', -1);
+  assert.equal(JSON.stringify(shown('bannedGrid')), JSON.stringify(byScore.slice(0, 10)), 'sorting restarts the window at the top of its new order');
+
+  type('bannedGrid', 'cscli');      // 4 rows survive: BANNED[2] + the 3 synthetic cscli rows
+  const cscli = byScore.filter((ip) => BIG.banned.find((r) => r.ip === ip).origin === 'cscli');
+  assert.ok(cscli.length === 4 && JSON.stringify(shown('bannedGrid')) === JSON.stringify(cscli),
+    `filtered rows show from the top of the window (4 rows ≤ batch): ${JSON.stringify(shown('bannedGrid'))}`);
+  assert.ok(/<span class="pg-range">Loaded 1–4 sur 4<\/span>/.test(els.bannedPager.innerHTML) && /data-loadmore[^>]*disabled/.test(els.bannedPager.innerHTML),
+    'the strip counts the filtered window, not the full store');
+
+  type('bannedGrid', '');           // cleared filter: full order back, batch size and sort untouched
+  assert.ok(/<span class="pg-range">Loaded 1–10 sur 12<\/span>/.test(els.bannedPager.innerHTML) && /\+2 remaining/.test(els.bannedPager.innerHTML),
+    'a cleared filter restarts the window at the batch size');
 });
 
 // The dashboard cards and the Settings form fill from what the server sends — not from this cycle's activity counters.

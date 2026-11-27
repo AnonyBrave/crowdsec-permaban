@@ -99,31 +99,46 @@ test('Ui_ExportLinksMatchTheServerRoutes', () => {
   assert.ok(html.includes('id="profileModal"') && html.includes('id="closeProfile"'));
 });
 
-// Page strips under each grid (the reference UI's pagination row): the static pairing must hold — a pager host id app.js paints lives in
-// index.html right after its table, and delegation is wired from that host (`data-page-prev` / `data-page-next`, `data-pagesize` select).
+// Page strips + scroll sentinels under each grid (the reference UI's footer row, adapted to the window model): the static pairing must
+// hold — a pager host id app.js paints lives in index.html right after its table, each table carries a sentinel app.js observes,
+// and delegation is wired from the pager host itself (`data-loadmore` button, `data-pagesize` select).
 test('Ui_GridPaginationWired', () => {
   const grids = [...html.matchAll(/(candidatesGrid|bannedGrid)/g)].map((m) => m[1]);
   assert.ok(html.includes('<div class="pager" id="candidatePager">') && html.includes('<div class="pager" id="bannedPager">'),
     'both grids need a static pager host');
+  assert.ok(html.includes('<div class="sentinel" id="candidateSentinel">') && html.includes('<div class="sentinel" id="bannedSentinel">'),
+    'both grids need a static scroll sentinel');
   for (const g of grids) {
     const open = html.indexOf(`<table id="${g}"`);
     assert.ok(open >= 0, `${g} is not in the page`);
     const section = html.slice(open, html.indexOf('</section>', open));
     const hostId = g === 'candidatesGrid' ? 'candidatePager' : 'bannedPager';
+    const sentId = g === 'candidatesGrid' ? 'candidateSentinel' : 'bannedSentinel';
     assert.ok(section.includes(`id="${hostId}"`), `${hostId} pager is not inside the ${g} view`);
+    assert.ok(section.includes(`id="${sentId}"`), `${sentId} sentinel is not inside the ${g} view`);
   }
 
-  assert.match(appjs, /data-page-prev[^]*data-page-next/, 'the painted pager strip must carry prev/next buttons');
-  assert.match(appjs, /<select data-pagesize>/, 'the painted strip needs its page-size select');
+  assert.match(appjs, /data-loadmore/, 'the painted footer strip must carry its Load-more button');
+  assert.match(appjs, /<select data-pagesize>/, 'the painted strip needs its batch-size select');
   assert.ok(/host\.addEventListener\('click'/.test(appjs) && /host\.addEventListener\('change'/.test(appjs),
     'pager hosts must be wired by delegation from the host itself');
-  assert.match(appjs, /grids\[name\]\.page = 0;[^]*renderGrid\(name\)/, 'typing a new filter restarts at page 1');
+  assert.match(appjs, /grids\[name\]\.text = [^]*renderGrid\(name\)/, 'typing a new filter re-renders the window from its top');
+
+  // The window model: the DOM holds the loaded slice, a scroll appends the next batch, and the observer is guarded for the
+  // offline shim (no IntersectionObserver in Node — `tests/grid.test.js` drives `appendBatch` directly).
+  assert.match(appjs, /loaded:\s*\d+,\s*batch:\s*25/, 'grid state must track the loaded window and its batch size');
+  assert.match(appjs, /g\.loaded = Math\.min\(g\.batch, total\)/, 'renderGrid restarts the window at the top of its order');
+  assert.match(appjs, /typeof IntersectionObserver === 'function'/, 'the scroll observer must be guarded (offline shims have none)');
+  assert.match(appjs, /insertAdjacentHTML === 'function'/, 'appended batches must go through insertAdjacentHTML in a browser, innerHTML in the shim');
 
   const css = read(path.join(PUBLIC, 'style.css'));
-  assert.ok(/\.pager\s*\{/.test(css), 'no .pager rule for the page strip under each grid');
+  assert.ok(/\.pager\s*\{/.test(css), 'no .pager rule for the footer strip under each grid');
+  assert.ok(/\.sentinel\s*\{/.test(css), 'no .sentinel rule for the scroll sentinel under each grid');
+  assert.ok(/@keyframes fadeRow/.test(css) && /tr\.in\s*\{/.test(css), 'appended rows need the fade-in keyframes + .in rule');
+  assert.ok(/prefers-reduced-motion[\s\S]{0,60}tr\.in/.test(css), 'the fade-in must be disabled under prefers-reduced-motion');
 
-  // The exported helpers drive pages in `tests/grid.test.js` (no DOM): sorting + filtering stay over the whole list, one slice paints.
-  assert.match(appjs, /export \{[^}]*setPage[^}]*setPerPage/, 'pagination helpers must be exported for offline driving');
+  // The exported helpers drive the window in `tests/grid.test.js` (no DOM): sorting + filtering stay over the whole list, one batch appends.
+  assert.match(appjs, /export \{[^}]*setBatch[^}]*appendBatch/, 'window helpers must be exported for offline driving');
 });
 
 // app.js loads as an ES module, so every relative import must be a real file the static UI serves.

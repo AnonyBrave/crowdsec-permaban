@@ -187,50 +187,63 @@ $('autoBanToggle').addEventListener('change', async () => {
 // ── grids: one sort key + filter text each. Defaults match the server's own order.
 // `keys` is one field per row: `_s`, the searchable text built by searchRow() below — every column the grid shows,
 // exactly as the page renders it (grouped numbers and `dd/mm/yyyy, hh:mm:ss` dates included), so typing what you can see matches.
-// Pagination mirrors the reference UI's tables: sorting and filtering run over the whole list; only one page of rows reaches
-// the DOM — a Banned grid with 60k decisions is unusable when every row lands in `innerHTML`, and a page-size select + prev/next
-// under each table keeps painting fast. The pager strip lives in the static host ids below, painted as markup by paintPager()
-// and wired by delegation from the host itself (`data-page-prev` / `data-page-next` buttons, `data-pagesize` select).
+// The grids load as a window, not as pages: sorting and filtering run over the whole list, the DOM holds only the loaded
+// slice. A Banned grid with 60k decisions is unusable when every row lands in `innerHTML`, so each grid opens at one batch
+// (25 rows) and appends the next batch when its sentinel scrolls into view (`IntersectionObserver`, 200px prefetch) — the
+// appended rows fade in. The footer strip lives in the static pager host ids below, painted as markup by paintPager() and
+// wired by delegation from the host itself (`data-loadmore` button, `data-pagesize` select). A filter, a header click, or
+// a new cycle restarts the window at the top of its order; `Load more` covers keyboard users and grids that fit one screen.
 const PAGE_SIZES = [1, 10, 25, 50, 100, 250];
 const grids = {
-  candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['_s'], page: 0, perPage: 25, pager: 'candidatePager' },
-  bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['_s'], page: 0, perPage: 25, pager: 'bannedPager' },
+  candidatesGrid: { rows: [], key: 'score', dir: -1, text: '', filter: 'filterCandidates', body: 'candidateRows', keys: ['_s'], loaded: 25, batch: 25, pager: 'candidatePager', sentinel: 'candidateSentinel' },
+  bannedGrid: { rows: [], key: 'createdAt', dir: -1, text: '', filter: 'filterBanned', body: 'bannedRows', keys: ['_s'], loaded: 25, batch: 25, pager: 'bannedPager', sentinel: 'bannedSentinel' },
 };
 
-// Filter first (cheap), then sort the surviving rows — `sortRows` is stable, so ties keep the server's ranking. Only the active
-// page of that sorted order is turned into row markup; a filter typed in the box lands on page 1 with the same rule.
+// Filter first (cheap), then sort the surviving rows — `sortRows` is stable, so ties keep the server's ranking. Only the
+// loaded window of that sorted order reaches the DOM; a filter typed in the box, a header click, or a new cycle restarts
+// the window at the top of its order (the scroll sentinel appends the next batch as the user reads down).
 function renderGrid(name) {
   const g = grids[name];
   const visible = sortRows(filterRows(g.rows, g.text, g.keys), g.key, g.dir);
   const total = visible.length;
-  const pages = Math.max(1, Math.ceil(total / g.perPage));
-  if (g.page >= pages) g.page = pages - 1;
-  const start = g.page * g.perPage;
-  $(g.body).innerHTML = visible.slice(start, start + g.perPage).map((x) => name === 'candidatesGrid' ? rowCandidate(x) : rowBanned(x)).join('');
+  g.loaded = Math.min(g.batch, total);   // window restarts at the top — the first batch only
+  $(g.body).innerHTML = visible.slice(0, g.loaded).map((x) => name === 'candidatesGrid' ? rowCandidate(x) : rowBanned(x)).join('');
   for (const th of document.querySelectorAll(`#${name} th[data-key]`))
     th.querySelector('.ind').textContent = th.dataset.key === g.key ? (g.dir < 0 ? ' ▼' : ' ▲') : '';
-  paintPager(name, total);   // range label + prev/next + page-size select as markup.
+  paintPager(name, total);   // range label + Load more + batch-size select as markup.
   wireButtons();
 }
 
 function pagerMarkup(g, total) {
-  const pages = Math.max(1, Math.ceil(total / g.perPage));
-  const from = total ? g.page * g.perPage + 1 : 0;
-  const to = Math.min(total, g.page * g.perPage + g.perPage);
-  const sizeSel = `<select data-pagesize>${PAGE_SIZES.map((n) => `<option value="${n}"${n === g.perPage ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+  const to = Math.min(total, g.loaded);
+  const sizeSel = `<select data-pagesize>${PAGE_SIZES.map((n) => `<option value="${n}"${n === g.batch ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+  const left = total - g.loaded;
   return `<span class="pg-lbl">Rows per page</span>${sizeSel}` +
-    `<button data-page-prev title="Previous page"${g.page === 0 ? ' disabled' : ''}>←</button>` +
-    `<span class="pg-range">${from}–${to} sur ${total}</span>` +
-    `<button data-page-next title="Next page"${g.page >= pages - 1 ? ' disabled' : ''}>→</button>` +
-    `<span class="pg-page">page ${g.page + 1} / ${pages}</span>`;
+    `<span class="pg-range">Loaded 1–${to} sur ${total}</span>` +
+    `<button data-loadmore title="Append the next ${Math.min(g.batch, Math.max(left, 0))} loaded rows"${left <= 0 ? ' disabled' : ''}>Load more</button>` +
+    `<span class="pg-page">${left > 0 ? `+${left} remaining` : 'all loaded'}</span>`;
 }
 
 function paintPager(name, total) { $(grids[name].pager).innerHTML = pagerMarkup(grids[name], total); }
 
-// Delegation from the static host: page buttons carry `data-page-prev` / `data-page-next`, the size select `data-pagesize`.
-// A click on a host re-paints only that grid's row slice, so prev/next stays instant whatever the store size.
-function setPage(name, p) { const g = grids[name]; g.page = Math.max(0, p); renderGrid(name); }
-function setPerPage(name, n) { const g = grids[name]; if (PAGE_SIZES.includes(n)) { g.perPage = n; g.page = 0; } renderGrid(name); }
+// Delegation from the static host: the Load-more button carries `data-loadmore` and the batch-size select `data-pagesize`
+// as valueless presence attributes. `appendBatch` adds the next slice to the body (fade-in rows) and re-paints only the strip,
+// so a scroll down never re-renders the rows already on screen.
+function setBatch(name, n) { const g = grids[name]; if (PAGE_SIZES.includes(n)) g.batch = n; renderGrid(name); }
+function appendBatch(name) {
+  const g = grids[name];
+  const visible = sortRows(filterRows(g.rows, g.text, g.keys), g.key, g.dir);
+  if (g.loaded >= visible.length) return false;   // window already holds every row
+  const batch = visible.slice(g.loaded, g.loaded + g.batch);
+  g.loaded += batch.length;
+  const html = batch.map((x, i) => name === 'candidatesGrid' ? rowCandidate(x, i) : rowBanned(x, i)).join('');
+  const body = $(g.body);
+  if (typeof body.insertAdjacentHTML === 'function') body.insertAdjacentHTML('beforeend', html);   // browser: append, no re-parse
+  else body.innerHTML += html;   // offline shim: concatenation is the same result
+  paintPager(name, visible.length);
+  wireButtons(body);
+  return true;
+}
 
 for (const name of Object.keys(grids)) {
   for (const th of document.querySelectorAll(`#${name} th[data-key]`)) {
@@ -246,23 +259,32 @@ for (const name of Object.keys(grids)) {
 
   $(grids[name].filter).addEventListener('input', () => {
     grids[name].text = $(grids[name].filter).value;
-    grids[name].page = 0;   // a new filter starts at the top of its sorted order, not on page 3.
-    renderGrid(name);
+    renderGrid(name);   // a new filter restarts the window at the top of its order, not at row 2 500.
   });
 
   const host = $(grids[name].pager);
-  // The page buttons are painted as presence attributes (`data-page-prev`, `data-page-next` — no value), so the delegation must test for
-  // membership with `in`: a real dataset entry is the empty string, and an empty string is falsy.
+  // The Load-more button and the batch-size select are painted as presence attributes (`data-loadmore` / `data-pagesize`
+  // — no value), so the delegation must test for membership with `in`: a real dataset entry is the empty string, and an
+  // empty string is falsy.
   host.addEventListener('click', (e) => {
     const ds = e.target?.dataset;
-    if (ds && 'pagePrev' in ds) setPage(name, grids[name].page - 1);
-    if (ds && 'pageNext' in ds) setPage(name, grids[name].page + 1);
+    if (ds && 'loadmore' in ds) appendBatch(name);
   });
   host.addEventListener('change', (e) => {
-    // Same presence-attribute rule as the buttons: `data-pagesize` has no value, so test membership and read the select's own value.
+    // Same presence-attribute rule as the button: `data-pagesize` has no value, so test membership and read the select's own value.
     const ds = e.target?.dataset;
-    if (ds && 'pagesize' in ds) setPerPage(name, Number(e.target.value));
+    if (ds && 'pagesize' in ds) setBatch(name, Number(e.target.value));
   });
+
+  // The scroll sentinel under each table: when it comes within 200px of the viewport, append the next batch. The observer
+  // stays observing the same element, so each append moves the sentinel down and the next scroll triggers the next batch.
+  // Under the offline shim there is no IntersectionObserver — `tests/grid.test.js` drives `appendBatch` directly.
+  const sent = $(grids[name].sentinel);
+  if (sent && typeof IntersectionObserver === 'function') {
+    new IntersectionObserver((ents) => {
+      for (const en of ents) if (en.isIntersecting) appendBatch(name);
+    }, { rootMargin: '200px 0px' }).observe(sent);
+  }
 }
 
 // ── rendering ────────────────────────────────────────────────────────
@@ -321,14 +343,16 @@ function setStatus(connected) {
 
 const ipCell = (ip) => `<span class="ip" data-profile="${esc(ip)}" title="Show the stored events and raw JSON for ${esc(ip)}">${esc(ip)}</span>`;
 
-function rowCandidate(c) {
+// `fade` is the batch index of an appended row (absent for the rows painted by `renderGrid`): rows arriving on a scroll
+// get the `.in` class + a staggered animation delay (the CSS keyframes in style.css do the fade), the initial window stays plain.
+function rowCandidate(c, fade = -1) {
   const verdictClass = c.action === 'auto-ban' ? 'ban' : c.action === 'suggest' ? 'sug' : 'none';
   const action = c.action === 'auto-ban'
     ? (c.autoBannedByApp ? '<span class="tag">banned by app</span>' : '<span class="tag ban">will auto-ban</span>')
     : c.action === 'suggest' ? `<span class="tag sug">suggested</span>` : '';
   const ban = c.action !== 'none' && !c.autoBannedByApp
     ? `<button class="mini" data-ban="${esc(c.ip)}" data-score="${c.score}">Ban now</button>` : '';
-  return `<tr>
+  return `<tr${fadeRowAttr(fade)}>
     <td>${ipCell(c.ip)}</td><td>${esc(c.country || '')}</td><td class="num">${n0(c.score)}</td>
     <td class="num">${n0(c.eventCount)}</td><td class="num">${c.scenarioCount}</td><td class="num">${c.banCount}</td>
     <td>${fmtTs(c.firstSeen)}</td><td>${fmtTs(c.lastSeen)}</td>
@@ -336,14 +360,18 @@ function rowCandidate(c) {
     <td class="actions">${ban}</td></tr>`;
 }
 
-function rowBanned(b) {
-  return `<tr>
+function rowBanned(b, fade = -1) {
+  return `<tr${fadeRowAttr(fade)}>
     <td>${ipCell(b.ip)}</td><td>${esc(b.country || '')}</td><td>${esc(b.scenario)}</td><td>${esc(b.origin)}</td>
     <td class="num">${n0(b.events)}</td><td class="num">${b.bans}</td><td class="num">${n0(b.score)}</td>
     <td>${fmtTs(b.createdAt)}</td><td>${fmtTs(b.expiresAt)}</td>
     <td>${b.autoBannedByApp ? '<span class="tag">by app</span>' : ''}</td>
     <td class="actions"><button class="mini" data-unban="${b.id}">Unban</button></td></tr>`;
 }
+
+// The fade-in attribute for a batch row: `.in` drives the keyframe animation, the delay staggers the batch so 25 rows
+// ripple in top-down instead of flashing at once (capped at 12 rows of delay — 30ms each, the tail appears together).
+const fadeRowAttr = (i) => i < 0 ? '' : ` class="in" style="animation-delay:${Math.min(i, 12) * 30}ms"`;
 
 // The filter box matches a row by the text the page actually shows for it: every column's raw value **and** its
 // displayed form (grouped numbers, `dd/mm/yyyy, hh:mm:ss` dates), plus the verdict tag words. So `3499`, `3,499`,
@@ -367,18 +395,33 @@ function searchBanned(b) {
 
 function shortReason(r) { return r.length > 70 ? r.slice(0, 69) + '…' : r; }
 
-function wireButtons() {
-  document.querySelectorAll('[data-ban]').forEach((b) => b.addEventListener('click', async () => {
-    const r = await fetch('/api/ban', { method: 'POST', body: JSON.stringify({ ip: b.dataset.ban, score: Number(b.dataset.score ?? 0) }) }).then((x) => x.json());
-    banner(r.ok ? `Banned ${b.dataset.ban}` : `Ban failed: ${r.message}`, r.ok ? 'ok' : 'error');
-    if (r.cycle) renderCycle(r.cycle);
-  }));
-  document.querySelectorAll('[data-unban]').forEach((b) => b.addEventListener('click', async () => {
-    const r = await fetch('/api/unban', { method: 'POST', body: JSON.stringify({ decisionId: Number(b.dataset.unban) }) }).then((x) => x.json());
-    banner(r.ok ? `Unbanned decision ${b.dataset.unban} (${r.deleted} removed)` : `Unban failed: ${r.message}`, r.ok ? 'ok' : 'error');
-    if (r.cycle) renderCycle(r.cycle);
-  }));
-  document.querySelectorAll('[data-profile]').forEach((el) => el.addEventListener('click', () => openProfile(el.dataset.profile)));
+// `root` scopes the wiring: `renderGrid` wires the whole page (rows painted fresh), `appendBatch` wires only its appended
+// body. Each control carries a `data-bound` marker so a row appended on a scroll is wired exactly once — re-wiring the
+// same button on every paint would fire the ban/unban request twice on one click.
+function wireButtons(root = document) {
+  root.querySelectorAll('[data-ban]').forEach((b) => {
+    if (b.dataset.bound) return;
+    b.dataset.bound = '1';
+    b.addEventListener('click', async () => {
+      const r = await fetch('/api/ban', { method: 'POST', body: JSON.stringify({ ip: b.dataset.ban, score: Number(b.dataset.score ?? 0) }) }).then((x) => x.json());
+      banner(r.ok ? `Banned ${b.dataset.ban}` : `Ban failed: ${r.message}`, r.ok ? 'ok' : 'error');
+      if (r.cycle) renderCycle(r.cycle);
+    });
+  });
+  root.querySelectorAll('[data-unban]').forEach((b) => {
+    if (b.dataset.bound) return;
+    b.dataset.bound = '1';
+    b.addEventListener('click', async () => {
+      const r = await fetch('/api/unban', { method: 'POST', body: JSON.stringify({ decisionId: Number(b.dataset.unban) }) }).then((x) => x.json());
+      banner(r.ok ? `Unbanned decision ${b.dataset.unban} (${r.deleted} removed)` : `Unban failed: ${r.message}`, r.ok ? 'ok' : 'error');
+      if (r.cycle) renderCycle(r.cycle);
+    });
+  });
+  root.querySelectorAll('[data-profile]').forEach((el) => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => openProfile(el.dataset.profile));
+  });
 }
 
 // ── per-IP profile: stored events with the full raw JSON we kept ─────
@@ -564,4 +607,4 @@ loadState();
 // and now the dedicated Blocklists tab rows (+ Add list / collect). `loadState` is exported too: a fresh page must paint from `/api/state` alone (no SSE frame,
 // no "Refresh now" click) — including fillSettingsForm painting the working rows from `/api/state` settings.
 // The page itself loads app.js as an ES module and ignores these; zero dependencies stay.
-export { renderCycle, guard, loadState, searchCandidate, searchBanned, fillSettingsForm, collectBlocklists, addBlockList, renderBlockRows, setPage, setPerPage };
+export { renderCycle, guard, loadState, searchCandidate, searchBanned, fillSettingsForm, collectBlocklists, addBlockList, renderBlockRows, setBatch, appendBatch };

@@ -500,9 +500,12 @@ test('Server_InspectReportsChartGeometryAndShortScenarioNames', async () => {
       req.on('end', () => j(res, 200, { result: [91] }));
       return;
     }
+    // The chart window is the last 14 days from the cycle's own `at` (today on a live server), so the fixture dates are
+    // anchored to the current day — a 2026-11-05 fixture fell out of the window as time passed and the spike bar vanished.
+    const recent = (n) => new Date(Date.now() - n * 86400000).toISOString();
     const data = p === '/api/alerts'
-      ? [{ id: 41, created_at: '2026-11-05T09:00:00.000Z', scenario: 'ssh:bfs', events_count: 50, source: { ip: ALERT_IP, cn: 'US' } },
-         { id: 42, created_at: '2026-11-05T10:00:00.000Z', scenario: 'crowdsecurity:sshd-max', events_count: 300, source: { ip: '198.51.100.7', cn: 'US' } }]
+      ? [{ id: 41, created_at: recent(2), scenario: 'ssh:bfs', events_count: 50, source: { ip: ALERT_IP, cn: 'US' } },
+         { id: 42, created_at: recent(2), scenario: 'crowdsecurity:sshd-max', events_count: 300, source: { ip: '198.51.100.7', cn: 'US' } }]
       : [];
     j(res, 200, { pagination: { page: 1, page_size: 200, total_items: data.length, total_pages: 1 }, data });
   });

@@ -114,7 +114,8 @@
         <th data-key="banCount" data-numeric>Bans</th><th data-key="firstSeen">First seen</th><th data-key="lastSeen">Last seen</th>
         <th data-key="reason">Verdict</th><th></th>
       </tr></thead><tbody id="candidateRows"></tbody></table>
-      <div class="pager" id="candidatePager"></div>   <!-- painted by paintPager(): rows-per-page select, prev/next, "x–y sur N", page counter -->
+      <div class="pager" id="candidatePager"></div>   <!-- painted by paintPager(): batch-size select, "Loaded 1–x sur N", Load more -->
+      <div class="sentinel" id="candidateSentinel"></div>   <!-- IntersectionObserver appends the next batch when this scrolls into view -->
     </section>
 
     <!-- ── Banned ────────────────────────────────────────────────── -->
@@ -132,7 +133,8 @@
         <th data-key="score" data-numeric>Score</th><th data-key="createdAt">Created</th><th data-key="expiresAt">Expires</th>
         <th data-key="autoBannedByApp">By app</th><th></th>
       </tr></thead><tbody id="bannedRows"></tbody></table>
-      <div class="pager" id="bannedPager"></div>   <!-- painted by paintPager(): rows-per-page select, prev/next, "x–y sur N", page counter -->
+      <div class="pager" id="bannedPager"></div>   <!-- painted by paintPager(): batch-size select, "Loaded 1–x sur N", Load more -->
+      <div class="sentinel" id="bannedSentinel"></div>   <!-- IntersectionObserver appends the next batch when this scrolls into view -->
     </section>
 
     <!-- ── Activity log ──────────────────────────────────────────── -->

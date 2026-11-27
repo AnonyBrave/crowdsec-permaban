@@ -143,9 +143,7 @@ page header carrying the title of the active view, rounded bordered cards on sky
 - **Banned** — every active decision joined with the IP's stored profile (events, bans, score), best-known country,
   scenario, origin (`crowdsec` / `cscli` / …), created/expires, `by app` tag, one-click **Unban**. Same sortable headers
   and filter box: ip, country, scenario, origin, events, bans, score, created, expires, the tag — all matchable.
-- **Grid pages** — each grid paints one page of rows at a time (page-size select `1 / 10 / 25 / 50 / 100 / 250`, default 25) with prev/next buttons and an `x–y sur N` range under the
-  table. Sorting and filtering run over the whole list, so a store of 60k decisions stays responsive; typing a new filter lands on page 1 of the active order (proven by
-  `Grid_PaginationPaintsOnePageAndNavigates`, where prev/next re-paints that slice alone).
+- **Grid infinite scroll & batching** — each grid opens at one batch (batch-size select `1 / 10 / 25 / 50 / 100 / 250`, default 25) and appends the next batch with a fade-in animation as the scroll sentinel enters the viewport (`IntersectionObserver`, 200px prefetch). Sorting and filtering run over the whole list, so a store of 60k decisions stays responsive; a filter or header click restarts the window at the top of the active order (proven by `Grid_ScrollWindowAppendsBatchesAndFades`). A `Load more` button and `Loaded 1–x sur N` range sit under the table.
 - **Per-IP viewer** — clicking any IP cell in Candidates or Banned opens a profile modal: score + events/scenarios/bans,
   ban state, and every stored event for that IP with its **full raw JSON** as received from the Web UI API.
 - **Export links** — one-click downloads of exactly what the grids show: `candidates.csv` / `banned.csv`,
